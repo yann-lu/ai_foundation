@@ -111,6 +111,43 @@ public class AiChatMedService {
          });
     }
 
+    // ========================= Orchestrator 专用 =========================
+
+    /**
+     * 流式获取 token（不持久化消息，由 AgentRunMedService 负责保存）。
+     *
+     * @param conversation  会话
+     * @param userMessage   用户消息
+     * @param systemPrompt  系统提示词（可选）
+     * @param modelName     模型名称（可选，为空时从会话解析）
+     * @return token 流
+     */
+    public Flux<String> streamTokens(AgentConversationInfo conversation, String userMessage,
+                                     String systemPrompt, String modelName) {
+        String resolvedModel = resolveModelName(modelName, conversation);
+        ChatClient chatClient = buildChatClient(resolvedModel, null, null);
+        List<Message> messages = buildMessages(conversation, systemPrompt, userMessage);
+        return chatClient.prompt()
+                .messages(messages)
+                .stream()
+                .content()
+                .filter(StringUtils::isNotBlank);
+    }
+
+    /**
+     * 保存助手消息并更新会话最后消息时间。
+     *
+     * @param conversation  会话
+     * @param content       助手回复内容
+     * @param durationMs    耗时（毫秒）
+     * @return 保存后的消息实体
+     */
+    public AgentMessageInfo saveAssistantMessage(AgentConversationInfo conversation, String content, long durationMs) {
+        AgentMessageInfo msg = saveAssistantMessage(conversation.getId(), content, 0, durationMs);
+        conversationMedService.touchLastMessage(conversation.getId(), conversation.getModelName());
+        return msg;
+    }
+
     // ========================= 内部方法 =========================
 
     private void validateRequest(String userMessage) {

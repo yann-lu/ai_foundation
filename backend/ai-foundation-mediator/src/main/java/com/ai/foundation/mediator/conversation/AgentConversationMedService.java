@@ -115,6 +115,14 @@ public class AgentConversationMedService {
         return conversation;
     }
 
+    public AgentConversationInfo requireById(Long conversationId) {
+        AgentConversationInfo conversation = conversationService.getById(conversationId);
+        if (conversation == null) {
+            throw new BusinessException(ResultCode.DATA_NOT_FOUND, "会话不存在: " + conversationId);
+        }
+        return conversation;
+    }
+
     public List<MessageDTO> messages(String conversationCode, Long beforeId, int limit) {
         AgentConversationInfo conversation = requireByCode(conversationCode);
         int size = limit > 0 && limit <= 100 ? limit : 50;

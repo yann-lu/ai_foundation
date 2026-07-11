@@ -4,7 +4,7 @@
 
 AI Foundation 是一个 Agent 编排平台，按项目空间管理 Chat/Embedding 模型、CLI、Skill、知识库等能力，对外提供会话、消息、Agent 编排、RAG 检索等能力，并配套管理后台与 SDK。
 
-当前进度：**阶段 0（工程骨架与基础设施）**、**阶段 1（管理后台基础与项目配置）**、**阶段 2（会话、消息与最小 Chat 闭环）** 均已完成并通过端到端联调。
+当前进度：**阶段 0（工程骨架与基础设施）**、**阶段 1（管理后台基础与项目配置）**、**阶段 2（会话、消息与最小 Chat 闭环）**、**阶段 3（Run、事件流与 Agent 生命周期）** 均已完成。
 
 ## 技术栈与版本
 
@@ -67,6 +67,13 @@ ai-foundation-parent (pom)
 - **管理后台前端**：新增「会话管理」页（分页/详情/清空/删除）+「Playground」页（选择项目→创建会话→流式对话，SSE 逐 token 展示）。
 
 ## 接口清单
+
+### Run 管理（阶段 3）
+- `POST /chat/runs/create`：创建 Run，返回 `runCode`，异步启动编排。
+- `POST /chat/runs/events`（SSE）：订阅 Run 事件流。
+- `POST /chat/runs/detail`：查询 Run 详情。
+- `POST /chat/runs/cancel`：取消运行中的 Run。
+- `POST /chat/runs/confirm`：人工确认（骨架）。
 
 | 方法 | 路径 | 说明 | 鉴权 |
 | --- | --- | --- | --- |
@@ -141,4 +148,4 @@ npm run build        # 类型检查 + 生产构建
 
 ## 后续阶段
 
-阶段 3 起将实现：Run/事件流/Agent 生命周期、CLI 工具、Skill、知识库 RAG、Plan/ReAct 编排、SDK、文件附件等（详见 `docs/implementation-roadmap.md`）。
+阶段 4 起将实现：CLI/API/Page 能力配置与执行、Skill、知识库 RAG、Plan/ReAct 编排、SDK、文件附件等（详见 `docs/implementation-roadmap.md`）。

@@ -1,5 +1,5 @@
 import request from './request'
-import type { ConversationDTO, ConversationCreateRequest, MessageDTO, ChatSyncRequest, ChatSyncResponse, ChatStreamRequest } from '@/types/api'
+import type { ConversationDTO, ConversationCreateRequest, MessageDTO, ChatSyncRequest, ChatSyncResponse, ChatStreamRequest, CreateRunRequest, CreateRunResponse } from '@/types/api'
 
 export function createConversation(data: ConversationCreateRequest) {
   return request.post<ConversationDTO, { data: ConversationDTO }>('/chat/create', data)
@@ -24,4 +24,23 @@ export function streamChat(data: ChatStreamRequest): Promise<ReadableStream<Uint
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     return res.body!
   })
+}
+
+export function createRun(data: CreateRunRequest): Promise<{ data: CreateRunResponse }> {
+  return request.post<CreateRunResponse, { data: CreateRunResponse }>('/chat/runs/create', data)
+}
+
+export function streamRunEvents(runCode: string): Promise<ReadableStream<Uint8Array>> {
+  return fetch('/chat/runs/events', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ runCode })
+  }).then((res) => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.body!
+  })
+}
+
+export function cancelRun(runCode: string, operator?: string): Promise<{ data: boolean }> {
+  return request.post<boolean, { data: boolean }>('/chat/runs/cancel', { runCode, operator })
 }

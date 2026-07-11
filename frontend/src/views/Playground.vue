@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { onMounted, ref, nextTick, computed } from 'vue'
 import { ElMessage } from 'element-plus'
-import { Plus, Promotion, Loading } from '@element-plus/icons-vue'
+import { Plus, Promotion, Loading, VideoPause } from '@element-plus/icons-vue'
 import { pageProjects } from '@/api/project'
-import { createConversation, getMessages, streamChat } from '@/api/chat'
-import type { AgentProjectDTO, MessageDTO, ChatStreamRequest, ChatStreamChunkDTO } from '@/types/api'
+import { createConversation, createRun, streamRunEvents, cancelRun } from '@/api/chat'
+import type { AgentProjectDTO, CreateRunRequest, RunStreamEnvelope } from '@/types/api'
 
 interface ChatMessage {
   role: string
@@ -46,6 +46,8 @@ async function handleNewConversation() {
   ElMessage.success('会话已创建')
 }
 
+const currentRunCode = ref('')
+
 async function handleSend() {
   if (!canSend.value) return
   const text = userInput.value.trim()
@@ -56,14 +58,18 @@ async function handleSend() {
   sending.value = true
   await scrollToBottom()
 
-  const req: ChatStreamRequest = {
+  const req: CreateRunRequest = {
     conversationCode: conversationCode.value,
     userMessage: text,
     systemPrompt: systemPrompt.value || undefined
   }
 
   try {
-    const stream = await streamChat(req)
+    const createRes = await createRun(req)
+    const runCode = createRes.data.runCode
+    currentRunCode.value = runCode
+
+    const stream = await streamRunEvents(runCode)
     const reader = stream.getReader()
     const decoder = new TextDecoder()
     let buffer = ''
@@ -80,21 +86,28 @@ async function handleSend() {
         if (!dataLine) continue
         const jsonStr = dataLine.slice(5).trim()
         if (!jsonStr) continue
-        let chunk: ChatStreamChunkDTO
+        let envelope: RunStreamEnvelope
         try {
-          chunk = JSON.parse(jsonStr)
+          envelope = JSON.parse(jsonStr)
         } catch {
           continue
         }
-        if (chunk.eventType === 'token') {
-          assistantMsg.content += chunk.content || ''
+        if (envelope.eventType === 'chat_token') {
+          assistantMsg.content += String(envelope.data || '')
           await scrollToBottom()
-        } else if (chunk.eventType === 'complete') {
+        } else if (envelope.eventType === 'run_complete') {
           assistantMsg.streaming = false
-        } else if (chunk.eventType === 'error') {
+          const reply = envelope.data
+          if (typeof reply === 'string' && reply) {
+            assistantMsg.content = reply
+          }
+          await scrollToBottom()
+        } else if (envelope.eventType === 'run_error') {
           assistantMsg.streaming = false
-          assistantMsg.content = '❌ ' + (chunk.content || '未知错误')
+          assistantMsg.content = '❌ ' + (String(envelope.data || '执行失败'))
           ElMessage.error('模型调用失败')
+        } else if (envelope.eventType === 'run_cancelled') {
+          assistantMsg.streaming = false
         }
       }
     }
@@ -104,6 +117,17 @@ async function handleSend() {
     ElMessage.error('请求失败')
   } finally {
     sending.value = false
+    currentRunCode.value = ''
+  }
+}
+
+async function handleStop() {
+  if (currentRunCode.value) {
+    try {
+      await cancelRun(currentRunCode.value)
+    } catch {
+      /* ignore */
+    }
   }
 }
 
@@ -158,8 +182,11 @@ onMounted(loadProjects)
         @keydown="handleKeydown"
         resize="none"
       />
-      <el-button type="primary" :icon="Promotion" :loading="sending" :disabled="!canSend" @click="handleSend">
+      <el-button v-if="!sending" type="primary" :icon="Promotion" :disabled="!canSend" @click="handleSend">
         发送
+      </el-button>
+      <el-button v-else type="danger" :icon="VideoPause" @click="handleStop">
+        停止
       </el-button>
     </div>
   </div>

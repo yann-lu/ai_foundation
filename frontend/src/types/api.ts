@@ -149,3 +149,24 @@ export interface ChatStreamChunkDTO {
   content: string | null
   timestamp: number
 }
+
+export interface CreateRunRequest {
+  conversationCode: string
+  userMessage: string
+  systemPrompt?: string
+}
+
+export interface CreateRunResponse {
+  runCode: string
+  traceId: string | null
+}
+
+export interface RunStreamEnvelope {
+  eventType: 'run_start' | 'chat_start' | 'chat_token' | 'chat_complete' | 'run_complete' | 'run_error' | 'run_cancelled'
+  runCode: string
+  conversationCode: string
+  timestamp: number
+  taskState: string | null
+  data: unknown
+  traceId: string | null
+}
