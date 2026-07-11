@@ -1,0 +1,19 @@
+spring:
+  datasource:
+    url: jdbc:mysql://stage-mysql:3306/ai_foundation?useUnicode=true&characterEncoding=UTF-8&useSSL=false&serverTimezone=Asia/Shanghai&allowPublicKeyRetrieval=true
+    username: ${DB_USER:ai_app}
+    password: ${DB_PASSWORD:AiApp@2026}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  data:
+    redis:
+      host: ${REDIS_HOST:redis}
+      port: ${REDIS_PORT:6379}
+      database: 0
+  ai:
+    openai:
+      api-key: ${OPENAI_API_KEY:sk-placeholder}
+      base-url: ${OPENAI_BASE_URL:http://localhost:8081}
+
+logging:
+  level:
+    com.ai.foundation: INFO

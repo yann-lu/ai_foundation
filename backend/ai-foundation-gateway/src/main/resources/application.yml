@@ -1,0 +1,55 @@
+spring:
+  application:
+    name: ai-foundation-gateway
+  profiles:
+    active: qa
+  jackson:
+    date-format: yyyy-MM-dd HH:mm:ss
+    time-zone: Asia/Shanghai
+    default-property-inclusion: non_null
+
+server:
+  port: 8080
+
+mybatis-plus:
+  mapper-locations: classpath*:mapper/**/*.xml
+  type-aliases-package: com.ai.foundation.dal.entity
+  global-config:
+    db-config:
+      id-type: AUTO
+      logic-delete-field: isDelete
+      logic-delete-value: 1
+      logic-not-delete-value: 0
+    banner: false
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.slf4j.Slf4jImpl
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: when_authorized
+
+agent:
+  orchestration-mode: PLAN
+  ai:
+    models:
+      chat: deepseek-r1:1.5b
+      embedding: bge-m3
+  retrieval:
+    top-k: 5
+    similarity-threshold: 0.6
+  admin:
+    accounts:
+      - username: admin
+        password: ${ADMIN_PASSWORD:admin123}
+        nickname: 系统管理员
+
+logging:
+  level:
+    com.ai.foundation: INFO
+    org.springframework.web: INFO
