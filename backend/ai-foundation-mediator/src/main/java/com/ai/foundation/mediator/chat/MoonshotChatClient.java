@@ -81,7 +81,7 @@ public class MoonshotChatClient {
                                 return Flux.fromIterable(tokens);
                             }));
                 })
-                .filter(StringUtils::isNotBlank);
+                .filter(StringUtils::isNotEmpty);
     }
 
     public String call(String model, List<Message> messages) {
@@ -161,7 +161,7 @@ public class MoonshotChatClient {
             JsonNode content = root.path("choices").path(0).path("delta").path("content");
             if (content.isTextual()) {
                 String text = content.asText();
-                if (StringUtils.isNotBlank(text)) {
+                if (StringUtils.isNotEmpty(text)) {
                     tokens.add(text);
                 }
             }

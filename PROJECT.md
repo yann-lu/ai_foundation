@@ -145,9 +145,26 @@ npm run build        # 类型检查 + 生产构建
 ```
 浏览器打开 `http://localhost:5173`，使用 `admin / admin123` 登录。
 
+### Playground 前端（assistant-ui）
+```bash
+cd frontend-playground
+npm install
+npm run dev          # http://localhost:5174 ，Vite 代理 /admin、/chat -> :8080
+npm run build        # 类型检查 + 生产构建
+```
+基于 assistant-ui（React 19 + Vite 6 + Tailwind v4）的独立 Playground 调试台，对接现有 Run 事件模型。
+- 对话流式：通过 `useExternalStoreRuntime` 适配器消费 `/chat/runs/events` SSE，`chat_token` 逐 token 渲染。
+- 思考过程：解析模型输出中的 `<think>...</think>` 片段为 reasoning 消息 part，流式实时展示。
+- Run Inspector：右侧面板展示 Run 生命周期事件，并折叠 chat_token 噪音聚合计数。
+- 会话管理：左侧侧栏选择项目、新建/选择历史会话、System Prompt 临时覆盖。
+
+核心对接逻辑在 `frontend-playground/src/runtime/aui-runtime.ts`（`useAiRuntime` 钩子），通过 `onNew` 回调串联 createRun + EventSource。
+
+
 ### 访问地址
 - 后端：http://localhost:8080（健康检查 `GET /actuator/health` 返回 `{"status":"UP"}`）
 - 前端：http://localhost:5173（浏览器访问，用 `admin` / `admin123` 登录；Vite 已代理 `/admin` → `:8080`）
+- Playground 前端：http://localhost:5174（React + assistant-ui，登录同 `admin` / `admin123`；Vite 代理 `/admin`、`/chat` -> `:8080`）
 - MySQL：localhost:3306，库名 `ai_foundation`，用户 `ai_app` / `AiApp@2026`
 - Redis：localhost:6379
 - 模型服务：Ollama `http://localhost:11434`（OpenAI 兼容，当前使用 `deepseek-r1:1.5b`）

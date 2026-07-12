@@ -91,7 +91,7 @@ public class AiChatMedService {
         return Flux.concat(
                 Flux.just(ChatStreamChunkDTO.of(ChatStreamEventTypeEnum.START)),
                 streamModel(modelName, chatClient, messages)
-                        .filter(StringUtils::isNotBlank)
+                        .filter(StringUtils::isNotEmpty)
                         .doOnNext(contentBuilder::append)
                         .map(token -> ChatStreamChunkDTO.of(ChatStreamEventTypeEnum.TOKEN, token)),
                 Flux.defer(() -> {
@@ -127,7 +127,7 @@ public class AiChatMedService {
         ChatClient chatClient = buildChatClient(resolvedModel, null, null);
         List<Message> messages = buildMessages(conversation, systemPrompt, userMessage);
         return streamModel(resolvedModel, chatClient, messages)
-                .filter(StringUtils::isNotBlank);
+                .filter(StringUtils::isNotEmpty);
     }
 
     private String callModel(String modelName, ChatClient chatClient, List<Message> messages) {
