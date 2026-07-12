@@ -64,7 +64,7 @@ ai-foundation-parent (pom)
 - **同步 Chat**：`AiChatMedService.syncChat`，使用 Spring AI ChatClient 调用 OpenAI 兼容接口；支持 `modelName`、`systemPrompt`、`temperature`、`maxTokens`；加载历史消息构建上下文；保存 user/assistant 消息。
 - **流式 Chat（SSE）**：`AiChatMedService.streamChat`，返回 `Flux<ServerSentEvent>`；事件类型 start/token/complete/error；流式完成后保存完整 assistant 消息。
 - **ChatClient 手动配置**：`AiClientConfig` 手动创建 `OpenAiApi` → `OpenAiChatModel` → `ChatClient` Bean（`@ConditionalOnMissingBean` 不覆盖自动配置）。
-- **管理后台前端**：新增「会话管理」页（分页/详情/清空/删除）+「Playground」页（选择项目→创建会话→流式对话，SSE 逐 token 展示）。
+- **管理后台前端**：新增「会话管理」页（分页/详情/清空/删除）+「Playground」页（选择项目→创建会话→流式对话，SSE 逐 token 展示）。Playground 已重构为对话后台测试台，支持历史会话侧栏、System Prompt 临时覆盖、Run 状态面板、SSE 事件时间线，以及解析模型输出中的 `<think>...</think>` 思考链路。
 
 ## 接口清单
 
@@ -74,6 +74,12 @@ ai-foundation-parent (pom)
 - `POST /chat/runs/detail`：查询 Run 详情。
 - `POST /chat/runs/cancel`：取消运行中的 Run。
 - `POST /chat/runs/confirm`：人工确认（骨架）。
+
+### Playground 测试台
+- 页面路径：`/playground`，面向后台开发与调试人员。
+- 交互流程：选择项目 → 新建或选择历史会话 → 输入可选 System Prompt → 发送用户消息 → 通过 `/chat/runs/create` + `/chat/runs/events` 订阅 Run 事件。
+- 流式能力：使用浏览器 `EventSource` 消费 SSE，实时展示 `run_start`、`chat_start`、`chat_token`、`chat_complete`、`run_complete`、`run_error`、`run_cancelled`。
+- 思考链路：当前后端未单独定义 reasoning 事件，前端解析模型文本中的 `<think>...</think>` 片段并在消息折叠区与右侧 Inspector 中展示。
 
 | 方法 | 路径 | 说明 | 鉴权 |
 | --- | --- | --- | --- |

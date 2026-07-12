@@ -45,7 +45,7 @@ npm run dev
 
 ### 功能页面
 - 项目配置、模型配置、会话管理（管理后台菜单）
-- Playground：选择项目 → 新建会话 → 流式对话（SSE 逐 token 展示）
+- Playground：对话后台测试台，支持项目/历史会话切换、System Prompt 临时覆盖、Run SSE 事件时间线、逐 token 流式输出，以及解析 `<think>...</think>` 思考链路
 
 
 ## 目录结构

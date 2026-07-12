@@ -21,10 +21,10 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
-import org.springframework.ai.chat.prompt.ChatOptions;
-import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -43,6 +43,8 @@ public class AiChatMedService {
     private final AgentMessageService messageService;
     private final AgentModelResolver modelResolver;
     private final ObjectMapper objectMapper;
+    private final ConversationSummaryService summaryService;
+    private final MoonshotChatClient moonshotChatClient;
 
     // ========================= 同步 Chat =========================
 
@@ -58,10 +60,7 @@ public class AiChatMedService {
         long startTime = System.currentTimeMillis();
         String content;
         try {
-            content = chatClient.prompt()
-                    .messages(messages)
-                    .call()
-                    .content();
+            content = callModel(modelName, chatClient, messages);
         } catch (Exception e) {
             log.error("同步对话调用模型失败 conversationCode={}", request.getConversationCode(), e);
             throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "模型调用失败: " + e.getMessage());
@@ -70,6 +69,7 @@ public class AiChatMedService {
 
         AgentMessageInfo assistantMsg = saveAssistantMessage(conversation.getId(), content, 0, duration);
         conversationMedService.touchLastMessage(conversation.getId(), modelName);
+        summaryService.updateSummary(conversation.getId(), request.getUserMessage(), content, modelName);
         log.info("同步对话成功 conv={} userMsgId={} assistantMsgId={} duration={}ms",
                 conversation.getConversationCode(), userMsg.getId(), assistantMsg.getId(), duration);
         return new ChatSyncResponse(content, 0, duration, assistantMsg.getId());
@@ -90,10 +90,7 @@ public class AiChatMedService {
 
         return Flux.concat(
                 Flux.just(ChatStreamChunkDTO.of(ChatStreamEventTypeEnum.START)),
-                chatClient.prompt()
-                        .messages(messages)
-                        .stream()
-                        .content()
+                streamModel(modelName, chatClient, messages)
                         .filter(StringUtils::isNotBlank)
                         .doOnNext(contentBuilder::append)
                         .map(token -> ChatStreamChunkDTO.of(ChatStreamEventTypeEnum.TOKEN, token)),
@@ -101,6 +98,8 @@ public class AiChatMedService {
                     long duration = System.currentTimeMillis();
                     saveAssistantMessage(conversation.getId(), contentBuilder.toString(), 0, duration);
                     conversationMedService.touchLastMessage(conversation.getId(), modelName);
+                    summaryService.updateSummary(conversation.getId(),
+                            request.getUserMessage(), contentBuilder.toString(), modelName);
                     return Flux.just(ChatStreamChunkDTO.of(ChatStreamEventTypeEnum.COMPLETE));
                 })
         ).doOnSubscribe(sub -> log.info("流式对话开始 conv={}", request.getConversationCode()))
@@ -127,11 +126,39 @@ public class AiChatMedService {
         String resolvedModel = resolveModelName(modelName, conversation);
         ChatClient chatClient = buildChatClient(resolvedModel, null, null);
         List<Message> messages = buildMessages(conversation, systemPrompt, userMessage);
+        return streamModel(resolvedModel, chatClient, messages)
+                .filter(StringUtils::isNotBlank);
+    }
+
+    private String callModel(String modelName, ChatClient chatClient, List<Message> messages) {
+        if (KimiChatOptionsHelper.isKimiK2Model(modelName)) {
+            return moonshotChatClient.call(modelName, messages);
+        }
+        return chatClient.prompt()
+                .messages(messages)
+                .call()
+                .content();
+    }
+
+    private Flux<String> streamModel(String modelName, ChatClient chatClient, List<Message> messages) {
+        if (KimiChatOptionsHelper.isKimiK2Model(modelName)) {
+            return moonshotChatClient.stream(modelName, messages)
+                    .switchIfEmpty(Flux.defer(() -> fallbackKimiSyncStream(modelName, messages)))
+                    .onErrorResume(ex -> {
+                        log.warn("Kimi 流式调用失败，回退同步 model={} err={}", modelName, ex.getMessage());
+                        return fallbackKimiSyncStream(modelName, messages);
+                    });
+        }
         return chatClient.prompt()
                 .messages(messages)
                 .stream()
-                .content()
-                .filter(StringUtils::isNotBlank);
+                .content();
+    }
+
+    private Flux<String> fallbackKimiSyncStream(String modelName, List<Message> messages) {
+        return Mono.fromCallable(() -> moonshotChatClient.call(modelName, messages))
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMapMany(content -> StringUtils.isBlank(content) ? Flux.empty() : Flux.just(content));
     }
 
     /**
@@ -157,14 +184,9 @@ public class AiChatMedService {
     }
 
     private ChatClient buildChatClient(String modelName, Double temperature, Integer maxTokens) {
-        OpenAiChatOptions.Builder builder = OpenAiChatOptions.builder().model(modelName);
-        if (temperature != null) {
-            builder.temperature(temperature);
-        }
-        if (maxTokens != null) {
-            builder.maxTokens(maxTokens);
-        }
-        return chatClientBuilder.defaultOptions(builder.build()).build();
+        return chatClientBuilder
+                .defaultOptions(KimiChatOptionsHelper.build(modelName, temperature, maxTokens))
+                .build();
     }
 
     private String resolveModelName(String requestModelName, AgentConversationInfo conversation) {
@@ -183,6 +205,10 @@ public class AiChatMedService {
 
         List<Message> messages = new ArrayList<>();
         String sys = (systemPrompt != null && !systemPrompt.isBlank()) ? systemPrompt : DEFAULT_SYSTEM_PROMPT;
+        String summaryBlock = summaryService.formatSummaryBlock(conversation.getSummary());
+        if (summaryBlock != null) {
+            sys = summaryBlock + "\n\n" + sys;
+        }
         messages.add(new SystemMessage(sys));
 
         for (AgentMessageInfo msg : history) {
@@ -192,7 +218,12 @@ public class AiChatMedService {
                 messages.add(new AssistantMessage(msg.getContent()));
             }
         }
-        messages.add(new UserMessage(userMessage));
+        AgentMessageInfo last = history.isEmpty() ? null : history.get(history.size() - 1);
+        boolean duplicateUser = last != null && "user".equals(last.getRole())
+                && userMessage.equals(last.getContent());
+        if (!duplicateUser) {
+            messages.add(new UserMessage(userMessage));
+        }
         return messages;
     }
 

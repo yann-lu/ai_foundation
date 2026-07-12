@@ -30,15 +30,8 @@ export function createRun(data: CreateRunRequest): Promise<{ data: CreateRunResp
   return request.post<CreateRunResponse, { data: CreateRunResponse }>('/chat/runs/create', data)
 }
 
-export function streamRunEvents(runCode: string): Promise<ReadableStream<Uint8Array>> {
-  return fetch('/chat/runs/events', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ runCode })
-  }).then((res) => {
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.body!
-  })
+export function streamRunEvents(runCode: string): EventSource {
+  return new EventSource(`/chat/runs/events?runCode=${encodeURIComponent(runCode)}`)
 }
 
 export function cancelRun(runCode: string, operator?: string): Promise<{ data: boolean }> {

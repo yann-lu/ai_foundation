@@ -5,14 +5,18 @@ import com.ai.foundation.biz.run.AgentRunService;
 import com.ai.foundation.com.constant.RunTypeConstant;
 import com.ai.foundation.com.enums.RunStateEnum;
 import com.ai.foundation.com.enums.RunStreamEventTypeEnum;
+import com.ai.foundation.com.stream.RunStreamEnvelope;
 import com.ai.foundation.dal.entity.AgentConversationInfo;
-import com.ai.foundation.dal.entity.AgentMessageInfo;
 import com.ai.foundation.dal.entity.AgentRun;
 import com.ai.foundation.mediator.chat.AiChatMedService;
+import com.ai.foundation.mediator.chat.ConversationSummaryService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.stereotype.Component;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
 
@@ -24,73 +28,90 @@ public class AgentOrchestrator {
     private final AiChatMedService aiChatMedService;
     private final AgentRunService runService;
     private final AgentMessageService messageService;
-    private final RunEventEmitter runEventEmitter;
+    private final ConversationSummaryService summaryService;
 
     /**
-     * 启动 Run 全流程（异步调用）。
+     * 响应式流式执行 Run，直接将模型 token 流通过 SSE 推送给客户端。
      *
-     * @param run           已持久化的 Run
-     * @param conversation  会话
-     * @param userMessage   用户消息原文
-     * @param systemPrompt  系统提示词（可选）
+     * <p>三段式 Flux.concat：
+     * <ol>
+     *   <li>start — RUN_START / CHAT_START 事件</li>
+     *   <li>tokens — 模型流式 token，逐条映射为 CHAT_TOKEN 事件</li>
+     *   <li>end — 保存助手消息、更新摘要、更新 Run 状态，推送 CHAT_COMPLETE / RUN_COMPLETE</li>
+     * </ol>
+     *
+     * @param run          已持久化的 Run
+     * @param conversation 会话
+     * @param userMessage  用户消息原文
+     * @param systemPrompt 系统提示词（可选）
+     * @return 事件流
      */
-    public void startRun(AgentRun run, AgentConversationInfo conversation,
-                         String userMessage, String systemPrompt) {
+    public Flux<RunStreamEnvelope> streamRun(AgentRun run, AgentConversationInfo conversation,
+                                               String userMessage, String systemPrompt) {
         String runCode = run.getRunCode();
         String conversationCode = conversation.getConversationCode();
         long startTime = System.currentTimeMillis();
+        StringBuilder contentBuilder = new StringBuilder();
 
-        try {
-            updateRunState(run, RunTypeConstant.CHAT, RunStateEnum.EXECUTING, 0);
-            runEventEmitter.emit(runCode, conversationCode, RunStreamEventTypeEnum.RUN_START,
-                    RunStateEnum.EXECUTING.getCode(), null);
-            runEventEmitter.emit(runCode, conversationCode, RunStreamEventTypeEnum.CHAT_START,
-                    RunStateEnum.EXECUTING.getCode(), null);
+        Flux<RunStreamEnvelope> startEvents = Flux.just(
+                envelope(runCode, conversationCode, RunStreamEventTypeEnum.RUN_START,
+                        RunStateEnum.EXECUTING.getCode(), null),
+                envelope(runCode, conversationCode, RunStreamEventTypeEnum.CHAT_START,
+                        RunStateEnum.EXECUTING.getCode(), null)
+        );
 
-            StringBuilder contentBuilder = new StringBuilder();
+        Flux<RunStreamEnvelope> tokenEvents = aiChatMedService
+                .streamTokens(conversation, userMessage, systemPrompt, null)
+                .doOnNext(contentBuilder::append)
+                .map(token -> envelope(runCode, conversationCode,
+                        RunStreamEventTypeEnum.CHAT_TOKEN,
+                        RunStateEnum.EXECUTING.getCode(), token));
 
-            aiChatMedService.streamTokens(conversation, userMessage, systemPrompt, null)
-                    .doOnNext(token -> {
-                        contentBuilder.append(token);
-                        runEventEmitter.emit(runCode, conversationCode,
-                                RunStreamEventTypeEnum.CHAT_TOKEN,
-                                RunStateEnum.EXECUTING.getCode(), token);
-                    })
-                    .doOnError(err -> log.error("流式对话失败 runCode={}", runCode, err))
-                    .blockLast();
+        Flux<RunStreamEnvelope> endEvents = Mono
+                .fromCallable(() -> {
+                    String reply = contentBuilder.toString();
+                    long duration = System.currentTimeMillis() - startTime;
+                    if (StringUtils.isNotBlank(reply)) {
+                        aiChatMedService.saveAssistantMessage(conversation, reply, duration);
+                        summaryService.updateSummary(conversation.getId(),
+                                userMessage, reply, conversation.getModelName());
+                    }
+                    updateRunState(run, RunTypeConstant.CHAT, RunStateEnum.COMPLETED, 1);
+                    log.info("Run 完成 runCode={} duration={}ms replyLength={}", runCode, duration,
+                            reply == null ? 0 : reply.length());
+                    return reply;
+                })
+                .subscribeOn(Schedulers.boundedElastic())
+                .flatMapMany(reply -> Flux.just(
+                        envelope(runCode, conversationCode, RunStreamEventTypeEnum.CHAT_COMPLETE,
+                                RunStateEnum.COMPLETED.getCode(), null),
+                        envelope(runCode, conversationCode, RunStreamEventTypeEnum.RUN_COMPLETE,
+                                RunStateEnum.COMPLETED.getCode(), reply)
+                ));
 
-            String reply = contentBuilder.toString();
-            long duration = System.currentTimeMillis() - startTime;
-
-            if (StringUtils.isNotBlank(reply)) {
-                aiChatMedService.saveAssistantMessage(conversation, reply, duration);
-            }
-
-            runEventEmitter.emit(runCode, conversationCode, RunStreamEventTypeEnum.CHAT_COMPLETE,
-                    RunStateEnum.COMPLETED.getCode(), null);
-            updateRunState(run, RunTypeConstant.CHAT, RunStateEnum.COMPLETED, 1);
-            runEventEmitter.finishRun(runCode, conversationCode,
-                    RunStateEnum.COMPLETED.getCode(), reply);
-
-            log.info("Run 完成 runCode={} duration={}ms replyLength={}", runCode, duration,
-                    reply == null ? 0 : reply.length());
-        } catch (Exception e) {
-            log.error("Run 执行失败 runCode={}", runCode, e);
-            updateRunState(run, RunTypeConstant.CHAT, RunStateEnum.FAILED, 2);
-            runEventEmitter.failRun(runCode, conversationCode,
-                    e.getMessage() != null ? e.getMessage() : "执行失败");
-        }
+        return Flux.concat(startEvents, tokenEvents, endEvents)
+                .onErrorResume(err -> {
+                    log.error("Run 执行失败 runCode={}", runCode, err);
+                    return Mono.fromCallable(() -> {
+                            updateRunState(run, RunTypeConstant.CHAT, RunStateEnum.FAILED, 2);
+                            return err.getMessage() != null ? err.getMessage() : "执行失败";
+                        })
+                        .subscribeOn(Schedulers.boundedElastic())
+                        .flatMapMany(msg -> Flux.just(
+                                envelope(runCode, conversationCode, RunStreamEventTypeEnum.RUN_ERROR,
+                                        RunStateEnum.FAILED.getCode(), msg)));
+                });
     }
 
     /**
-     * 取消 Run：推送取消事件并更新状态。
+     * 取消 Run：更新状态。
      *
      * @param run              已持久化的 Run
      * @param conversationCode 会话编码
      */
     public void cancelRun(AgentRun run, String conversationCode) {
         updateRunState(run, run.getRunType(), RunStateEnum.CANCELLED, 2);
-        runEventEmitter.cancelRun(run.getRunCode(), conversationCode);
+        log.info("Run 已取消 runCode={}", run.getRunCode());
     }
 
     private void updateRunState(AgentRun run, String runType, RunStateEnum state, int compatState) {
@@ -104,5 +125,17 @@ public class AgentOrchestrator {
         run.setRunType(runType);
         run.setTaskState(state.getCode());
         run.setState(compatState);
+    }
+
+    private RunStreamEnvelope envelope(String runCode, String conversationCode,
+                                        RunStreamEventTypeEnum type, String taskState, Object data) {
+        RunStreamEnvelope env = new RunStreamEnvelope();
+        env.setEventType(type.getCode());
+        env.setRunCode(runCode);
+        env.setConversationCode(conversationCode);
+        env.setTimestamp(System.currentTimeMillis());
+        env.setTaskState(taskState);
+        env.setData(data);
+        return env;
     }
 }

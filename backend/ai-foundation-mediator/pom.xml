@@ -37,6 +37,10 @@
             <groupId>com.alibaba.cloud.ai</groupId>
             <artifactId>spring-ai-alibaba-graph-core</artifactId>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webflux</artifactId>
+        </dependency>
         <!-- Spring AI OpenAI 兼容模型接入 -->
         <dependency>
             <groupId>org.springframework.ai</groupId>

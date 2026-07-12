@@ -2,6 +2,7 @@ package com.ai.foundation.com.response;
 
 import lombok.Data;
 
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
@@ -18,7 +19,7 @@ public class PageResult<T> {
     }
 
     public PageResult(List<T> records, long total, long current, long size) {
-        this.records = records == null ? Collections.emptyList() : records;
+        this.records = records == null ? new ArrayList<>() : new ArrayList<>(records);
         this.total = total;
         this.current = current;
         this.size = size;

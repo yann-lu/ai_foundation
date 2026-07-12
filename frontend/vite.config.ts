@@ -12,9 +12,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/admin': { target: 'http://localhost:8080', changeOrigin: true },
-      '/chat': { target: 'http://localhost:8080', changeOrigin: true },
-      '/actuator': { target: 'http://localhost:8080', changeOrigin: true }
+      '/admin': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+      '/chat': { target: 'http://127.0.0.1:8080', changeOrigin: true },
+      '/actuator': { target: 'http://127.0.0.1:8080', changeOrigin: true }
     }
   }
 })

@@ -103,6 +103,7 @@ public class AgentConversationMedService {
         }
         messageService.softDeleteByConversationId(id);
         conversation.setLastMessageTime(null);
+        conversation.setSummary(null);
         conversationService.updateById(conversation);
         log.info("清空会话消息 id={}", id);
     }

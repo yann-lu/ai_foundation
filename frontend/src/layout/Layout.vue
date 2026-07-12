@@ -64,7 +64,7 @@ const menus = [
           </template>
         </el-dropdown>
       </el-header>
-      <el-main class="page-container">
+      <el-main :class="['page-container', { 'playground-page-container': route.path === '/playground' }]">
         <router-view />
       </el-main>
     </el-container>
