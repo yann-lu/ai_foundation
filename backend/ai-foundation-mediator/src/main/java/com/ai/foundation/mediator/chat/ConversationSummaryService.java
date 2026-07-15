@@ -41,22 +41,23 @@ public class ConversationSummaryService {
     /**
      * 根据本轮对话增量更新会话摘要。
      *
-     * @param conversationId  会话主键
-     * @param userMessage      本轮用户输入
-     * @param assistantReply   本轮助手回复
-     * @param modelName        模型名称（可选，为空时从会话解析）
-     */
-    public void updateSummary(Long conversationId, String userMessage,
+    * @param conversationId  会话主键
+    * @param userMessage      本轮用户输入
+    * @param assistantReply   本轮助手回复
+    * @param modelName        模型名称（可选，为空时从会话解析）
+     * @return 更新后的摘要内容，失败时返回 null
+    */
+    public String updateSummary(Long conversationId, String userMessage,
                               String assistantReply, String modelName) {
         if (conversationId == null
                 || StringUtils.isBlank(userMessage)
                 || StringUtils.isBlank(assistantReply)) {
-            return;
+            return null;
         }
         try {
             AgentConversationInfo conversation = conversationService.getById(conversationId);
             if (conversation == null) {
-                return;
+                return null;
             }
 
             String summaryModel = resolveSummaryModel(modelName, conversation);
@@ -75,7 +76,7 @@ public class ConversationSummaryService {
                     .content();
 
             if (StringUtils.isBlank(content)) {
-                return;
+                return null;
             }
 
             String summary = truncateSummary(content.trim());
@@ -86,9 +87,11 @@ public class ConversationSummaryService {
 
             log.info("会话摘要更新成功 conversationId={} summaryLength={}",
                     conversationId, summary.length());
+            return summary;
         } catch (Exception e) {
             log.warn("会话摘要更新失败 conversationId={} msg={}",
                     conversationId, e.getMessage());
+            return null;
         }
     }
 

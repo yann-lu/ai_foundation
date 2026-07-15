@@ -10,6 +10,7 @@ import com.ai.foundation.dal.entity.AgentConversationInfo;
 import com.ai.foundation.dal.entity.AgentRun;
 import com.ai.foundation.mediator.chat.AiChatMedService;
 import com.ai.foundation.mediator.chat.ConversationSummaryService;
+import com.ai.foundation.mediator.chat.ChatStreamChunk;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -19,6 +20,8 @@ import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 
 @Slf4j
 @Component
@@ -57,37 +60,64 @@ public class AgentOrchestrator {
                 envelope(runCode, conversationCode, RunStreamEventTypeEnum.RUN_START,
                         RunStateEnum.EXECUTING.getCode(), null),
                 envelope(runCode, conversationCode, RunStreamEventTypeEnum.CHAT_START,
-                        RunStateEnum.EXECUTING.getCode(), null)
+                        RunStateEnum.EXECUTING.getCode(), null),
+                envelope(runCode, conversationCode, RunStreamEventTypeEnum.USER_MESSAGE,
+                        RunStateEnum.EXECUTING.getCode(), userMessage)
         );
 
         Flux<RunStreamEnvelope> tokenEvents = aiChatMedService
-                .streamTokens(conversation, userMessage, systemPrompt, null)
-                .doOnNext(contentBuilder::append)
-                .map(token -> envelope(runCode, conversationCode,
-                        RunStreamEventTypeEnum.CHAT_TOKEN,
-                        RunStateEnum.EXECUTING.getCode(), token));
-
-        Flux<RunStreamEnvelope> endEvents = Mono
-                .fromCallable(() -> {
-                    String reply = contentBuilder.toString();
-                    long duration = System.currentTimeMillis() - startTime;
-                    if (StringUtils.isNotBlank(reply)) {
-                        aiChatMedService.saveAssistantMessage(conversation, reply, duration);
-                        summaryService.updateSummary(conversation.getId(),
-                                userMessage, reply, conversation.getModelName());
+                .streamChunks(conversation, userMessage, systemPrompt, null)
+                .doOnNext(chunk -> {
+                    if (chunk.hasContent()) {
+                        contentBuilder.append(chunk.content());
                     }
-                    updateRunState(run, RunTypeConstant.CHAT, RunStateEnum.COMPLETED, 1);
-                    log.info("Run 完成 runCode={} duration={}ms replyLength={}", runCode, duration,
-                            reply == null ? 0 : reply.length());
-                    return reply;
                 })
-                .subscribeOn(Schedulers.boundedElastic())
-                .flatMapMany(reply -> Flux.just(
-                        envelope(runCode, conversationCode, RunStreamEventTypeEnum.CHAT_COMPLETE,
-                                RunStateEnum.COMPLETED.getCode(), null),
-                        envelope(runCode, conversationCode, RunStreamEventTypeEnum.RUN_COMPLETE,
-                                RunStateEnum.COMPLETED.getCode(), reply)
-                ));
+                .flatMap(chunk -> {
+                    List<RunStreamEnvelope> events = new ArrayList<>();
+                    if (chunk.hasReasoning()) {
+                        events.add(envelope(runCode, conversationCode,
+                                RunStreamEventTypeEnum.CHAT_REASONING,
+                                RunStateEnum.EXECUTING.getCode(), chunk.reasoning()));
+                    }
+                    if (chunk.hasContent()) {
+                        events.add(envelope(runCode, conversationCode,
+                                RunStreamEventTypeEnum.CHAT_TOKEN,
+                                RunStateEnum.EXECUTING.getCode(), chunk.content()));
+                    }
+                    return Flux.fromIterable(events);
+                });
+
+       Flux<RunStreamEnvelope> endEvents = Mono
+               .fromCallable(() -> {
+                   String reply = contentBuilder.toString();
+                   long duration = System.currentTimeMillis() - startTime;
+                   String summary = null;
+                   if (StringUtils.isNotBlank(reply)) {
+                       aiChatMedService.saveAssistantMessage(conversation, reply, duration);
+                       summary = summaryService.updateSummary(conversation.getId(),
+                               userMessage, reply, conversation.getModelName());
+                   }
+                   updateRunState(run, RunTypeConstant.CHAT, RunStateEnum.COMPLETED, 1);
+                   log.info("Run 完成 runCode={} duration={}ms replyLength={}", runCode, duration,
+                           reply == null ? 0 : reply.length());
+                   return new Object[]{ reply, summary };
+               })
+               .subscribeOn(Schedulers.boundedElastic())
+               .flatMapMany(result -> {
+                   Object[] arr = (Object[]) result;
+                   String reply = (String) arr[0];
+                   String summary = (String) arr[1];
+                   List<RunStreamEnvelope> events = new ArrayList<>();
+                   events.add(envelope(runCode, conversationCode, RunStreamEventTypeEnum.CHAT_COMPLETE,
+                           RunStateEnum.COMPLETED.getCode(), null));
+                   if (StringUtils.isNotBlank(summary)) {
+                       events.add(envelope(runCode, conversationCode, RunStreamEventTypeEnum.SUMMARY_UPDATE,
+                               RunStateEnum.COMPLETED.getCode(), summary));
+                   }
+                   events.add(envelope(runCode, conversationCode, RunStreamEventTypeEnum.RUN_COMPLETE,
+                           RunStateEnum.COMPLETED.getCode(), reply));
+                  return Flux.fromIterable(events);
+              });
 
         return Flux.concat(startEvents, tokenEvents, endEvents)
                 .onErrorResume(err -> {

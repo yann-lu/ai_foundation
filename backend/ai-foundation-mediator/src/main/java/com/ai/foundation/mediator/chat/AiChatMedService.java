@@ -20,6 +20,8 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.chat.model.Generation;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
@@ -121,8 +123,33 @@ public class AiChatMedService {
         String resolvedModel = resolveModelName(modelName, conversation);
         ChatClient chatClient = buildChatClient(resolvedModel, null, null);
         List<Message> messages = buildMessages(conversation, systemPrompt, userMessage);
-        return streamModel(resolvedModel, chatClient, messages)
-                .filter(StringUtils::isNotEmpty);
+       return streamModel(resolvedModel, chatClient, messages)
+               .filter(StringUtils::isNotEmpty);
+   }
+
+    /**
+     * 流式获取 chunk（reasoning + content 分离），不持久化消息。
+     *
+     * <p>使用 {@code chatResponse()} 而非 {@code content()}，以提取
+     * reasoning_content（思考链）与正文 content，分别推送给前端。
+     *
+     * @param conversation  会话
+     * @param userMessage   用户消息
+     * @param systemPrompt   系统提示词（可选）
+     * @param modelName       模型名称（可选）
+     * @return 分离后的 chunk 流
+     */
+    public Flux<ChatStreamChunk> streamChunks(AgentConversationInfo conversation, String userMessage,
+                                               String systemPrompt, String modelName) {
+        String resolvedModel = resolveModelName(modelName, conversation);
+        ChatClient chatClient = buildChatClient(resolvedModel, null, null);
+        List<Message> messages = buildMessages(conversation, systemPrompt, userMessage);
+        return chatClient.prompt()
+                .messages(messages)
+                .stream()
+                .chatResponse()
+                .map(this::toChunk)
+                .doOnError(e -> log.error("streamChunks 失败 model={} msg={}", resolvedModel, extractErrorMsg(e)));
     }
 
     private String callModel(String modelName, ChatClient chatClient, List<Message> messages) {
@@ -153,7 +180,27 @@ public class AiChatMedService {
             }
             cur = cur.getCause();
         }
-        return e.getClass().getSimpleName() + ": " + e.getMessage();
+       return e.getClass().getSimpleName() + ": " + e.getMessage();
+   }
+
+    /**
+     * 将 Spring AI 的 {@link ChatResponse} 转换为 {@link ChatStreamChunk}，
+     * 分离 reasoning_content（思考链）与正文 content。
+     */
+    private ChatStreamChunk toChunk(ChatResponse response) {
+        if (response == null || response.getResult() == null) {
+            return new ChatStreamChunk(null, null);
+        }
+        Generation gen = response.getResult();
+        String content = gen.getOutput() != null ? gen.getOutput().getText() : null;
+        String reasoning = null;
+        if (gen.getMetadata() != null) {
+            Object rc = gen.getMetadata().get("reasoningContent");
+            if (rc instanceof String s && !s.isEmpty()) {
+                reasoning = s;
+            }
+        }
+        return new ChatStreamChunk(reasoning, content);
     }
 
     /**

@@ -14,6 +14,7 @@ export interface RunEventLog {
   eventType: RunStreamEnvelope['eventType']
   taskState: string | null
   dataPreview: string
+  data: unknown
   timestamp: number
 }
 
@@ -88,6 +89,7 @@ export function useAiRuntime(): UseAiRuntimeResult {
   const [conversationCode, setConversationCode] = useState('')
   const eventSourceRef = useRef<EventSource | null>(null)
   const rawRef = useRef('')
+  const reasoningRef = useRef('')
   const assistantIdRef = useRef('')
   const runCodeRef = useRef('')
 
@@ -98,6 +100,7 @@ export function useAiRuntime(): UseAiRuntimeResult {
         eventType: env.eventType,
         taskState: env.taskState,
         dataPreview: previewData(env.data),
+        data: env.data,
         timestamp: env.timestamp || Date.now(),
       },
     ])
@@ -129,6 +132,7 @@ export function useAiRuntime(): UseAiRuntimeResult {
       setIsRunning(true)
       setRunEvents([])
       rawRef.current = ''
+      reasoningRef.current = ''
 
       const startedAt = Date.now()
       setRunMeta({ runCode: '', startedAt })
@@ -154,28 +158,39 @@ export function useAiRuntime(): UseAiRuntimeResult {
             } catch {
               return
             }
-            appendEvent(env)
+           appendEvent(env)
 
-            if (env.eventType === 'chat_token') {
-              rawRef.current += String(env.data ?? '')
+            if (env.eventType === 'chat_reasoning') {
+              reasoningRef.current += String(env.data ?? '')
+              setMessages((prev) =>
+                updateAssistant(prev, assistantId, {
+                  id: assistantId,
+                  role: 'assistant',
+                  status: { type: 'running' },
+                  content: toContentParts(reasoningRef.current, rawRef.current),
+                }),
+              )
+           } else if (env.eventType === 'chat_token') {
+             rawRef.current += String(env.data ?? '')
               const parsed = parseThink(rawRef.current)
               setMessages((prev) =>
                 updateAssistant(prev, assistantId, {
                   id: assistantId,
                   role: 'assistant',
                   status: { type: 'running' },
-                  content: toContentParts(parsed.reasoning, parsed.answer),
+                  content: toContentParts(reasoningRef.current, parsed.answer),
                 }),
               )
             } else if (env.eventType === 'run_complete') {
               const reply = typeof env.data === 'string' ? env.data : rawRef.current
               const parsed = parseThink(reply)
+              const reasoning = reasoningRef.current || parsed.reasoning
               setMessages((prev) =>
                 updateAssistant(prev, assistantId, {
                   id: assistantId,
                   role: 'assistant',
                   status: { type: 'complete', reason: 'stop' },
-                  content: toContentParts(parsed.reasoning, parsed.answer),
+                  content: toContentParts(reasoning, parsed.answer),
                 }),
               )
               setRunMeta((m) => (m ? { ...m, finishedAt: Date.now() } : m))
@@ -194,13 +209,13 @@ export function useAiRuntime(): UseAiRuntimeResult {
               source.close()
               reject(new Error(String(env.data ?? '执行失败')))
             } else if (env.eventType === 'run_cancelled') {
-              const parsed = parseThink(rawRef.current)
+              const parsed = parseThink(rawRef.current || (typeof env.data === 'string' ? env.data : ''))
               setMessages((prev) =>
                 updateAssistant(prev, assistantId, {
                   id: assistantId,
                   role: 'assistant',
                   status: { type: 'incomplete', reason: 'cancelled' },
-                  content: toContentParts(parsed.reasoning, parsed.answer),
+                  content: toContentParts(reasoningRef.current || parsed.reasoning, parsed.answer),
                 }),
               )
               setRunMeta((m) => (m ? { ...m, finishedAt: Date.now() } : m))
@@ -255,6 +270,7 @@ export function useAiRuntime(): UseAiRuntimeResult {
 
   const loadHistory = useCallback((history: MessageDTO[]) => {
     rawRef.current = ''
+    reasoningRef.current = ''
     setRunEvents([])
     setRunMeta(null)
     setMessages(history.map(buildHistoryMessage))
@@ -265,6 +281,7 @@ export function useAiRuntime(): UseAiRuntimeResult {
     setRunEvents([])
     setRunMeta(null)
     rawRef.current = ''
+    reasoningRef.current = ''
     runCodeRef.current = ''
   }, [])
 
