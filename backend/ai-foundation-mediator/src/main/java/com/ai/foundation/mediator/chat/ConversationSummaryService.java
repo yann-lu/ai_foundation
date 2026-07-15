@@ -37,7 +37,6 @@ public class ConversationSummaryService {
     private final ChatClient.Builder chatClientBuilder;
     private final AgentConversationService conversationService;
     private final AgentModelResolver modelResolver;
-    private final MoonshotChatClient moonshotChatClient;
 
     /**
      * 根据本轮对话增量更新会话摘要。
@@ -70,12 +69,10 @@ public class ConversationSummaryService {
             messages.add(new UserMessage(buildSummaryUserPrompt(
                     conversation.getSummary(), userMessage.trim(), assistantReply.trim())));
 
-            String content = KimiChatOptionsHelper.isKimiK2Model(summaryModel)
-                    ? moonshotChatClient.call(summaryModel, messages)
-                    : chatClient.prompt()
-                            .messages(messages)
-                            .call()
-                            .content();
+            String content = chatClient.prompt()
+                    .messages(messages)
+                    .call()
+                    .content();
 
             if (StringUtils.isBlank(content)) {
                 return;

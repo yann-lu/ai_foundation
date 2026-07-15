@@ -12,7 +12,6 @@ import com.ai.foundation.facade.dto.chat.ChatSyncResponse;
 import com.ai.foundation.facade.dto.chat.ChatStreamRequest;
 import com.ai.foundation.mediator.conversation.AgentConversationMedService;
 import com.ai.foundation.mediator.model.AgentModelResolver;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -23,8 +22,6 @@ import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
-import reactor.core.publisher.Mono;
-import reactor.core.scheduler.Schedulers;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -42,9 +39,7 @@ public class AiChatMedService {
     private final AgentConversationMedService conversationMedService;
     private final AgentMessageService messageService;
     private final AgentModelResolver modelResolver;
-    private final ObjectMapper objectMapper;
     private final ConversationSummaryService summaryService;
-    private final MoonshotChatClient moonshotChatClient;
 
     // ========================= 同步 Chat =========================
 
@@ -131,34 +126,34 @@ public class AiChatMedService {
     }
 
     private String callModel(String modelName, ChatClient chatClient, List<Message> messages) {
-        if (KimiChatOptionsHelper.isKimiK2Model(modelName)) {
-            return moonshotChatClient.call(modelName, messages);
-        }
-        return chatClient.prompt()
+        try {
+            return chatClient.prompt()
                 .messages(messages)
                 .call()
                 .content();
+        } catch (Exception e) {
+            log.error("callModel 失败 model={} msg={}", modelName, extractErrorMsg(e));
+            throw e;
+        }
     }
 
     private Flux<String> streamModel(String modelName, ChatClient chatClient, List<Message> messages) {
-        if (KimiChatOptionsHelper.isKimiK2Model(modelName)) {
-            return moonshotChatClient.stream(modelName, messages)
-                    .switchIfEmpty(Flux.defer(() -> fallbackKimiSyncStream(modelName, messages)))
-                    .onErrorResume(ex -> {
-                        log.warn("Kimi 流式调用失败，回退同步 model={} err={}", modelName, ex.getMessage());
-                        return fallbackKimiSyncStream(modelName, messages);
-                    });
-        }
         return chatClient.prompt()
                 .messages(messages)
                 .stream()
-                .content();
+                .content()
+                .doOnError(e -> log.error("streamModel 失败 model={} msg={}", modelName, extractErrorMsg(e)));
     }
 
-    private Flux<String> fallbackKimiSyncStream(String modelName, List<Message> messages) {
-        return Mono.fromCallable(() -> moonshotChatClient.call(modelName, messages))
-                .subscribeOn(Schedulers.boundedElastic())
-                .flatMapMany(content -> StringUtils.isBlank(content) ? Flux.empty() : Flux.just(content));
+    private String extractErrorMsg(Throwable e) {
+        Throwable cur = e;
+        while (cur != null) {
+            if (cur instanceof org.springframework.web.reactive.function.client.WebClientResponseException wcre) {
+                return wcre.getStatusCode() + " body=" + wcre.getResponseBodyAsString();
+            }
+            cur = cur.getCause();
+        }
+        return e.getClass().getSimpleName() + ": " + e.getMessage();
     }
 
     /**
@@ -248,13 +243,5 @@ public class AiChatMedService {
         msg.setState(1);
         messageService.save(msg);
         return msg;
-    }
-
-    private String toJson(Object obj) {
-        try {
-            return objectMapper.writeValueAsString(obj);
-        } catch (Exception e) {
-            return "{}";
-        }
     }
 }

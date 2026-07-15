@@ -24,9 +24,9 @@ spring:
       chat:
         options:
           model: kimi-k2.6
-        extra-body:
-          thinking:
-            type: disabled
+          extra-body:
+            thinking:
+              type: disabled
       embedding:
         options:
           model: bge-m3
