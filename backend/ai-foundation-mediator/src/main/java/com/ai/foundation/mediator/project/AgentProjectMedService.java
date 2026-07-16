@@ -10,6 +10,7 @@ import com.ai.foundation.dal.entity.AgentProject;
 import com.ai.foundation.facade.dto.project.AgentProjectDTO;
 import com.ai.foundation.facade.dto.project.AgentProjectPageRequest;
 import com.ai.foundation.facade.dto.project.AgentProjectSaveRequest;
+import com.ai.foundation.mediator.prompt.ProjectPromptService;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -25,6 +26,7 @@ public class AgentProjectMedService {
 
     private final AgentProjectService projectService;
     private final ProjectConverter converter;
+    private final ProjectPromptService projectPromptService;
 
     public PageResult<AgentProjectDTO> page(AgentProjectPageRequest request) {
         Page<AgentProject> page = new Page<>(request.getCurrent(), request.getSize());
@@ -43,6 +45,7 @@ public class AgentProjectMedService {
     }
 
     public void create(AgentProjectSaveRequest request, String operator) {
+        projectPromptService.validateProjectConfig(request.getPromptVariables());
         if (projectService.existsByCode(request.getProjectCode(), null)) {
             throw new BusinessException(ResultCode.DATA_DUPLICATED, "项目编码已存在");
         }
@@ -57,6 +60,7 @@ public class AgentProjectMedService {
     }
 
     public void update(AgentProjectSaveRequest request, String operator) {
+        projectPromptService.validateProjectConfig(request.getPromptVariables());
         AgentProject existing = projectService.getById(request.getId());
         if (existing == null) {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "项目不存在");

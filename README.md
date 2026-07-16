@@ -16,7 +16,7 @@ brew services start mysql
 brew services start redis
 ollama serve   # 本地模型服务（OpenAI 兼容，默认端口 11434）
 ```
-建库建表：执行 `docs/full-schema-ddl.sql` 中 `agent_project`、`agent_model_config`、`agent_conversation_info`、`agent_message_info` 四张表（或全量）。库名 `ai_foundation`，用户 `ai_app` / `AiApp@2026`。
+建库建表：执行 `docs/full-schema-ddl.sql` 中核心表（或全量）。库名 `ai_foundation`，用户 `ai_app` / `AiApp@2026`。
 
 拉取模型：`ollama pull deepseek-r1:1.5b`
 
@@ -46,6 +46,7 @@ npm run dev
 ### 功能页面
 - 项目配置、模型配置、会话管理（管理后台菜单）
 - Playground：对话后台测试台，支持项目/历史会话切换、System Prompt 临时覆盖、Run SSE 事件时间线、逐 token 流式输出，以及解析 `<think>...</think>` 思考链路
+- Project 固定系统提示词与变量：项目配置中维护 `system_prompt`、`prompt_variables`，创建会话时写入变量快照，设计见 `docs/project-prompt-variables-design.md`
 
 
 ## 目录结构

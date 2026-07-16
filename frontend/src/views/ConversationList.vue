@@ -92,6 +92,15 @@ function formatTime(time?: string) {
   return time.replace('T', ' ')
 }
 
+function formatContextVariables(value?: string) {
+  if (!value) return '-'
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
+}
+
 onMounted(loadData)
 </script>
 
@@ -165,7 +174,9 @@ onMounted(loadData)
             <el-descriptions-item label="标题">{{ detailData.conversation.title }}</el-descriptions-item>
             <el-descriptions-item label="产品编码">{{ detailData.conversation.productCode }}</el-descriptions-item>
             <el-descriptions-item label="模型">{{ detailData.conversation.modelName || '-' }}</el-descriptions-item>
-            <el-descriptions-item label="集团/酒店">{{ detailData.conversation.blocCode }} / {{ detailData.conversation.hotelCode }}</el-descriptions-item>
+            <el-descriptions-item label="上下文变量" :span="2">
+              <pre class="context-json">{{ formatContextVariables(detailData.conversation.contextVariables) }}</pre>
+            </el-descriptions-item>
             <el-descriptions-item label="最后消息">{{ formatTime(detailData.conversation.lastMessageTime) }}</el-descriptions-item>
           </el-descriptions>
           <div style="max-height: 400px; overflow-y: auto;">
@@ -202,5 +213,13 @@ onMounted(loadData)
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.6;
+}
+
+.context-json {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
 }
 </style>

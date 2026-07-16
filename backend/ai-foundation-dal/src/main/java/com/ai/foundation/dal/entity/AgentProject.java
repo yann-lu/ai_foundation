@@ -23,6 +23,10 @@ public class AgentProject {
 
     private String description;
 
+    private String systemPrompt;
+
+    private String promptVariables;
+
     private Integer state;
 
     private String createUser;

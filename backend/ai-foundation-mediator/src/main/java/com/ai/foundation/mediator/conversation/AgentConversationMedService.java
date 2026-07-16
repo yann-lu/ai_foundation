@@ -17,6 +17,7 @@ import com.ai.foundation.facade.dto.conversation.ConversationDetailDTO;
 import com.ai.foundation.facade.dto.conversation.ConversationPageRequest;
 import com.ai.foundation.facade.dto.conversation.MessageDTO;
 import com.ai.foundation.mediator.model.AgentModelResolver;
+import com.ai.foundation.mediator.prompt.ProjectPromptService;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -37,6 +38,7 @@ public class AgentConversationMedService {
     private final AgentMessageService messageService;
     private final AgentProjectService projectService;
     private final AgentModelResolver modelResolver;
+    private final ProjectPromptService projectPromptService;
     private final ConversationConverter conversationConverter;
     private final MessageConverter messageConverter;
 
@@ -49,10 +51,9 @@ public class AgentConversationMedService {
         AgentConversationInfo entity = new AgentConversationInfo();
         entity.setProjectId(project.getId());
         entity.setProductCode(request.getProductCode());
-        entity.setBlocCode(request.getBlocCode() != null ? request.getBlocCode() : "");
-        entity.setHotelCode(request.getHotelCode() != null ? request.getHotelCode() : "");
         entity.setConversationCode(ConversationCodeGenerator.generate());
         entity.setUserId(request.getUserId() != null ? request.getUserId() : 0L);
+        entity.setContextVariables(projectPromptService.buildConversationVariables(project, request));
         entity.setTitle(request.getTitle() != null && !request.getTitle().isBlank()
                 ? request.getTitle() : "新会话");
         entity.setModelProvider("openai");

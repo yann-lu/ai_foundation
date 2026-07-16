@@ -5,6 +5,8 @@ import { Plus, Search, Refresh, Delete, Edit } from '@element-plus/icons-vue'
 import { pageProjects, createProject, updateProject, deleteProject } from '@/api/project'
 import type { AgentProjectDTO } from '@/types/api'
 
+const variableTemplate = '[\n  {\n    "name": "blocCode",\n    "label": "集团编码",\n    "type": "string",\n    "required": true\n  },\n  {\n    "name": "hotelCode",\n    "label": "酒店编码",\n    "type": "string",\n    "required": true\n  }\n]'
+
 const loading = ref(false)
 const tableData = ref<AgentProjectDTO[]>([])
 const total = ref(0)
@@ -15,7 +17,14 @@ const dialogVisible = ref(false)
 const dialogTitle = ref('')
 const submitLoading = ref(false)
 const formRef = ref<FormInstance>()
-const form = reactive<AgentProjectDTO>({ projectName: '', projectCode: '', description: '', state: 1 })
+const form = reactive<AgentProjectDTO>({
+  projectName: '',
+  projectCode: '',
+  description: '',
+  systemPrompt: '',
+  promptVariables: '',
+  state: 1
+})
 
 const rules: FormRules = {
   projectName: [{ required: true, message: '请输入项目名称', trigger: 'blur' }],
@@ -47,7 +56,15 @@ function handleReset() {
 
 function openCreate() {
   dialogTitle.value = '新增项目'
-  Object.assign(form, { id: undefined, projectName: '', projectCode: '', description: '', state: 1 })
+  Object.assign(form, {
+    id: undefined,
+    projectName: '',
+    projectCode: '',
+    description: '',
+    systemPrompt: '',
+    promptVariables: '',
+    state: 1
+  })
   dialogVisible.value = true
 }
 
@@ -61,6 +78,7 @@ async function handleSubmit() {
   if (!formRef.value) return
   await formRef.value.validate(async (valid) => {
     if (!valid) return
+    if (!validatePromptVariables()) return
     submitLoading.value = true
     try {
       if (form.id) {
@@ -76,6 +94,25 @@ async function handleSubmit() {
       submitLoading.value = false
     }
   })
+}
+
+function fillVariableTemplate() {
+  form.promptVariables = variableTemplate
+}
+
+function validatePromptVariables() {
+  if (!form.promptVariables?.trim()) return true
+  try {
+    const parsed = JSON.parse(form.promptVariables)
+    if (!Array.isArray(parsed)) {
+      ElMessage.warning('变量定义必须是 JSON 数组')
+      return false
+    }
+    return true
+  } catch {
+    ElMessage.warning('变量定义不是合法 JSON')
+    return false
+  }
 }
 
 function handleDelete(row: AgentProjectDTO) {
@@ -154,7 +191,7 @@ onMounted(loadData)
       </div>
     </div>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="520px">
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="760px">
       <el-form ref="formRef" :model="form" :rules="rules" label-width="90px">
         <el-form-item label="项目名称" prop="projectName">
           <el-input v-model="form.projectName" placeholder="请输入项目名称" />
@@ -164,6 +201,15 @@ onMounted(loadData)
         </el-form-item>
         <el-form-item label="项目描述" prop="description">
           <el-input v-model="form.description" type="textarea" :rows="3" placeholder="可选" />
+        </el-form-item>
+        <el-form-item label="系统提示词" prop="systemPrompt">
+          <el-input v-model="form.systemPrompt" type="textarea" :rows="8" placeholder="项目固定系统提示词，可使用 {{变量名}} 引用会话变量" />
+        </el-form-item>
+        <el-form-item label="变量定义" prop="promptVariables">
+          <div class="json-editor">
+            <el-input v-model="form.promptVariables" type="textarea" :rows="10" placeholder='JSON 数组，如 [{"name":"tenantId","type":"string","required":true}]' />
+            <el-button size="small" @click="fillVariableTemplate">填入酒店变量模板</el-button>
+          </div>
         </el-form-item>
         <el-form-item label="状态" prop="state">
           <el-radio-group v-model="form.state">
@@ -186,5 +232,16 @@ onMounted(loadData)
   align-items: center;
   gap: 4px;
   white-space: nowrap;
+}
+
+.json-editor {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.json-editor :deep(textarea) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 }
 </style>

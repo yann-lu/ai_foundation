@@ -21,6 +21,7 @@ import org.springframework.web.server.WebFilterChain;
 import reactor.core.publisher.Mono;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Optional;
 
 @Slf4j
 @Component
@@ -43,12 +44,14 @@ public class AdminAuthWebFilter implements WebFilter {
         if (token == null || token.isBlank()) {
             return writeUnauthorized(exchange);
         }
-        return MonoUtils.fromBlocking(() -> adminAuthMedService.verifyToken(token))
-                .flatMap(info -> {
-                    exchange.getAttributes().put(AdminContext.ADMIN_LOGIN_INFO_KEY, info);
+        return MonoUtils.fromBlocking(() -> Optional.ofNullable(adminAuthMedService.verifyToken(token)))
+                .flatMap(optional -> {
+                    if (optional.isEmpty()) {
+                        return writeUnauthorized(exchange);
+                    }
+                    exchange.getAttributes().put(AdminContext.ADMIN_LOGIN_INFO_KEY, optional.get());
                     return chain.filter(exchange);
-                })
-                .switchIfEmpty(Mono.defer(() -> writeUnauthorized(exchange)));
+                });
     }
 
     private Mono<Void> writeUnauthorized(ServerWebExchange exchange) {

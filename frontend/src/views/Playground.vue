@@ -40,6 +40,15 @@ interface ParsedAssistantContent {
   reasoning: string
 }
 
+interface PromptVariableDefinition {
+  name: string
+  label?: string
+  type?: string
+  required?: boolean
+  description?: string
+  defaultValue?: unknown
+}
+
 const projects = ref<AgentProjectDTO[]>([])
 const selectedProjectCode = ref('')
 const conversationCode = ref('')
@@ -59,6 +68,9 @@ const convPage = ref(1)
 const convPageSize = 20
 const convListRef = ref<HTMLElement>()
 const creating = ref(false)
+const variableDialogVisible = ref(false)
+const pendingVariables = ref<PromptVariableDefinition[]>([])
+const contextVariableForm = ref<Record<string, unknown>>({})
 
 const currentRunCode = ref('')
 const runStartedAt = ref<number>()
@@ -78,6 +90,57 @@ const runDuration = computed(() => {
   const end = runFinishedAt.value || Date.now()
   return `${Math.max(0, end - runStartedAt.value)} ms`
 })
+
+function parsePromptVariables(project?: AgentProjectDTO): PromptVariableDefinition[] {
+  if (!project?.promptVariables?.trim()) return []
+  try {
+    const parsed = JSON.parse(project.promptVariables)
+    return Array.isArray(parsed) ? parsed.filter(item => item?.name) : []
+  } catch {
+    return []
+  }
+}
+
+function openVariableDialog(definitions: PromptVariableDefinition[]) {
+  pendingVariables.value = definitions
+  const values: Record<string, unknown> = {}
+  definitions.forEach(item => {
+    if (item.defaultValue !== undefined && item.defaultValue !== null) {
+      values[item.name] = item.defaultValue
+    } else {
+      values[item.name] = ''
+    }
+  })
+  contextVariableForm.value = values
+  variableDialogVisible.value = true
+}
+
+function normalizeContextVariables() {
+  const values: Record<string, unknown> = {}
+  for (const item of pendingVariables.value) {
+    const raw = contextVariableForm.value[item.name]
+    if (item.required && (raw === undefined || raw === null || String(raw).trim() === '')) {
+      ElMessage.warning(`请填写${item.label || item.name}`)
+      return null
+    }
+    if (raw === undefined || raw === null || String(raw).trim() === '') {
+      continue
+    }
+    if (item.type === 'number') {
+      const num = Number(raw)
+      if (Number.isNaN(num)) {
+        ElMessage.warning(`${item.label || item.name} 必须是数字`)
+        return null
+      }
+      values[item.name] = num
+    } else if (item.type === 'boolean') {
+      values[item.name] = raw === true || raw === 'true'
+    } else {
+      values[item.name] = String(raw).trim()
+    }
+  }
+  return values
+}
 const activeModelName = computed(() => activeConversation.value?.modelName || selectedProject.value?.projectCode || '--')
 
 async function loadProjects() {
@@ -158,6 +221,22 @@ async function handleNewConversation() {
     ElMessage.warning('当前 Run 仍在执行')
     return
   }
+  const definitions = parsePromptVariables(selectedProject.value)
+  if (definitions.length) {
+    openVariableDialog(definitions)
+    return
+  }
+  await createNewConversation({})
+}
+
+async function confirmCreateConversation() {
+  const variables = normalizeContextVariables()
+  if (variables == null) return
+  variableDialogVisible.value = false
+  await createNewConversation(variables)
+}
+
+async function createNewConversation(contextVariables: Record<string, unknown>) {
   creating.value = true
   try {
     messages.value = []
@@ -165,6 +244,7 @@ async function handleNewConversation() {
     resetRunInspector()
     const res = await createConversation({
       productCode: selectedProjectCode.value,
+      contextVariables,
       title: `Playground ${new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`
     })
     conversationCode.value = res.data.conversationCode
@@ -555,5 +635,26 @@ onBeforeUnmount(closeEventSource)
         </div>
       </section>
     </aside>
+
+    <el-dialog v-model="variableDialogVisible" title="创建会话变量" width="520px">
+      <el-form label-width="120px">
+        <el-form-item
+          v-for="item in pendingVariables"
+          :key="item.name"
+          :label="item.label || item.name"
+          :required="item.required"
+        >
+          <el-select v-if="item.type === 'boolean'" v-model="contextVariableForm[item.name]" placeholder="请选择" style="width: 100%;">
+            <el-option label="true" :value="true" />
+            <el-option label="false" :value="false" />
+          </el-select>
+          <el-input v-else v-model="contextVariableForm[item.name]" :placeholder="item.description || item.name" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="variableDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="creating" @click="confirmCreateConversation">创建</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>

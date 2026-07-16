@@ -10,10 +10,9 @@ public class ConversationDTO {
     private Long id;
     private Long projectId;
     private String productCode;
-    private String blocCode;
-    private String hotelCode;
     private String conversationCode;
     private Long userId;
+    private String contextVariables;
     private String title;
     private String summary;
     private String modelProvider;

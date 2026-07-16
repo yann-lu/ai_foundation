@@ -1,17 +1,20 @@
 package com.ai.foundation.mediator.chat;
 
 import com.ai.foundation.biz.conversation.AgentMessageService;
+import com.ai.foundation.biz.project.AgentProjectService;
 import com.ai.foundation.com.enums.ChatStreamEventTypeEnum;
 import com.ai.foundation.com.exception.BusinessException;
 import com.ai.foundation.com.response.ResultCode;
 import com.ai.foundation.dal.entity.AgentConversationInfo;
 import com.ai.foundation.dal.entity.AgentMessageInfo;
+import com.ai.foundation.dal.entity.AgentProject;
 import com.ai.foundation.facade.dto.chat.ChatStreamChunkDTO;
 import com.ai.foundation.facade.dto.chat.ChatSyncRequest;
 import com.ai.foundation.facade.dto.chat.ChatSyncResponse;
 import com.ai.foundation.facade.dto.chat.ChatStreamRequest;
 import com.ai.foundation.mediator.conversation.AgentConversationMedService;
 import com.ai.foundation.mediator.model.AgentModelResolver;
+import com.ai.foundation.mediator.prompt.ProjectPromptService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -42,6 +45,8 @@ public class AiChatMedService {
     private final AgentMessageService messageService;
     private final AgentModelResolver modelResolver;
     private final ConversationSummaryService summaryService;
+    private final AgentProjectService projectService;
+    private final ProjectPromptService projectPromptService;
 
     // ========================= 同步 Chat =========================
 
@@ -246,11 +251,11 @@ public class AiChatMedService {
         Collections.reverse(history);
 
         List<Message> messages = new ArrayList<>();
-        String sys = (systemPrompt != null && !systemPrompt.isBlank()) ? systemPrompt : DEFAULT_SYSTEM_PROMPT;
+        AgentProject project = projectService.getById(conversation.getProjectId());
+        String requestSystemPrompt = systemPrompt != null && !systemPrompt.isBlank() ? systemPrompt : null;
         String summaryBlock = summaryService.formatSummaryBlock(conversation.getSummary());
-        if (summaryBlock != null) {
-            sys = summaryBlock + "\n\n" + sys;
-        }
+        String sys = projectPromptService.buildSystemPrompt(project, conversation,
+                summaryBlock, requestSystemPrompt, DEFAULT_SYSTEM_PROMPT);
         messages.add(new SystemMessage(sys));
 
         for (AgentMessageInfo msg : history) {

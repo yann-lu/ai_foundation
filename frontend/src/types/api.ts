@@ -24,6 +24,8 @@ export interface AgentProjectDTO {
   projectName: string
   projectCode: string
   description?: string
+  systemPrompt?: string
+  promptVariables?: string
   state: number
   createUser?: string
   modifyUser?: string
@@ -66,10 +68,9 @@ export interface ConversationDTO {
   id: number
   projectId: number
   productCode: string
-  blocCode: string
-  hotelCode: string
   conversationCode: string
   userId: number
+  contextVariables?: string
   title: string
   summary?: string
   modelProvider: string
@@ -83,6 +84,7 @@ export interface ConversationDTO {
 
 export interface ConversationCreateRequest {
   productCode: string
+  contextVariables?: Record<string, unknown>
   blocCode?: string
   hotelCode?: string
   userId?: number

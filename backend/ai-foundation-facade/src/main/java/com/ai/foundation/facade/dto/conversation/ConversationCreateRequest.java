@@ -4,6 +4,8 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Size;
 import lombok.Data;
 
+import java.util.Map;
+
 @Data
 public class ConversationCreateRequest {
 
@@ -16,6 +18,8 @@ public class ConversationCreateRequest {
 
     @Size(max = 64, message = "酒店编码最长64字符")
     private String hotelCode;
+
+    private Map<String, Object> contextVariables;
 
     private Long userId;
 

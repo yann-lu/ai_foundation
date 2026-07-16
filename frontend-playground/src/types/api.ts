@@ -24,6 +24,8 @@ export interface AgentProjectDTO {
   projectName: string
   projectCode: string
   description?: string
+  systemPrompt?: string
+  promptVariables?: string
   state: number
   createTime?: string
   updateTime?: string
@@ -34,6 +36,7 @@ export interface ConversationDTO {
   projectId: number
   productCode: string
   conversationCode: string
+  contextVariables?: string
   title: string
   summary?: string
   modelProvider: string
@@ -47,6 +50,7 @@ export interface ConversationDTO {
 
 export interface ConversationCreateRequest {
   productCode: string
+  contextVariables?: Record<string, unknown>
   title?: string
   modelName?: string
 }

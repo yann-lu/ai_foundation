@@ -52,13 +52,14 @@ ai-foundation-parent (pom)
 ### 阶段 1
 - **登录鉴权**：`POST /admin/auth/login`（配置账号），`AdminAuthWebFilter` 校验 `x-admin-token`，token 存 Redis（8h TTL），`/admin/*` 未授权返回 401。
 - **项目管理**：`agent_project` 表；分页/详情/新增/修改/删除接口；`project_code` 唯一校验；软删。
+- **Project 固定系统提示词**：`agent_project.system_prompt` 支持项目维度固定提示词，`prompt_variables` 定义项目所需上下文变量；创建会话时校验并固化变量快照。
 - **模型配置管理**：`agent_model_config` 表；分页/详情/新增/修改/删除；按项目筛选；模型类型 CHAT/EMBEDDING。
 - **AgentModelResolver** 雏形：按项目读取启用模型，未配置时回退系统默认（`agent.ai.models`）。
 - **管理后台前端**：Vue3 + Element Plus；登录页（token 存 localStorage）；请求拦截器自动携带 `x-admin-token`；可折叠侧边栏布局；项目配置页（列表/搜索/分页/增删改弹窗/状态标签）；模型配置页（按项目筛选/增删改）。
 
 
 ### 阶段 2
-- **会话与消息表**：`agent_conversation_info`（会话编码、项目/产品上下文、模型信息、置顶、状态）+ `agent_message_info`（角色、内容、token 数、耗时、附件、客户端 IP）。
+- **会话与消息表**：`agent_conversation_info`（会话编码、项目/产品上下文、通用变量快照、模型信息、置顶、状态）+ `agent_message_info`（角色、内容、token 数、耗时、附件、客户端 IP）。
 - **会话管理**：`AgentConversationMedService` 实现创建会话（按 productCode 查项目）、分页列表、详情（含消息）、删除（级联软删消息）、清空消息。`AgentMessageMedService` 实现最近消息、滚动消息。
 - **会话编码生成**：`ConversationCodeGenerator`（`conv_` + 时间戳 + 随机串）。
 - **同步 Chat**：`AiChatMedService.syncChat`，使用 Spring AI ChatClient 调用 OpenAI 兼容接口；支持 `modelName`、`systemPrompt`、`temperature`、`maxTokens`；加载历史消息构建上下文；保存 user/assistant 消息。
@@ -110,6 +111,7 @@ ai-foundation-parent (pom)
 
 - 库名：`ai_foundation`，用户：`ai_app` / `AiApp@2026`
 - 初始化 DDL：`docs/full-schema-ddl.sql`（全量），已建 `agent_project`、`agent_model_config`、`agent_conversation_info`、`agent_message_info`。
+- Project 提示词变量设计：`docs/project-prompt-variables-design.md`。变量在创建会话时传入并写入 `agent_conversation_info.context_variables`，后续对话通过 `conversationCode` 复用会话变量。
 - 约定：统一 `id`、`is_delete`、`create_time`、`update_time`；业务表含 `state`、`create_user`、`modify_user`；逻辑删除；无物理外键。
 
 ## 编码规范

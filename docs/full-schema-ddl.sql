@@ -13,6 +13,8 @@ CREATE TABLE IF NOT EXISTS `agent_project` (
     `project_name`    VARCHAR(128)     NOT NULL DEFAULT '' COMMENT '项目名称',
     `project_code`    VARCHAR(64)      NOT NULL DEFAULT '' COMMENT '项目编码，用于产品/SaaS隔离',
     `description`     VARCHAR(1024)    NOT NULL DEFAULT '' COMMENT '项目描述',
+    `system_prompt`   MEDIUMTEXT       NULL COMMENT '项目固定系统提示词，支持变量占位符',
+    `prompt_variables` JSON             NULL COMMENT '项目提示词变量定义JSON，描述变量名、是否必填、类型和默认值',
     `state`           TINYINT UNSIGNED NOT NULL DEFAULT 1 COMMENT '状态：0-停用，1-启用',
     `create_user`     VARCHAR(64)      NOT NULL DEFAULT '' COMMENT '创建人',
     `modify_user`     VARCHAR(64)      NOT NULL DEFAULT '' COMMENT '修改人',
@@ -47,10 +49,9 @@ CREATE TABLE IF NOT EXISTS `agent_conversation_info` (
     `id`                  BIGINT UNSIGNED  NOT NULL AUTO_INCREMENT COMMENT '主键',
     `project_id`          BIGINT UNSIGNED  NOT NULL DEFAULT 0 COMMENT '关联项目ID，agent_project.id',
     `product_code`        VARCHAR(64)      NOT NULL DEFAULT '' COMMENT '产品编码，冗余字段，便于按产品查询',
-    `bloc_code`           VARCHAR(64)      NOT NULL DEFAULT '' COMMENT '集团编码',
-    `hotel_code`          VARCHAR(64)      NOT NULL DEFAULT '' COMMENT '酒店编码',
     `conversation_code`   VARCHAR(64)      NOT NULL DEFAULT '' COMMENT '会话对外编码',
     `user_id`             BIGINT UNSIGNED  NOT NULL DEFAULT 0 COMMENT '用户ID',
+    `context_variables`   JSON             NULL COMMENT '会话上下文变量JSON，创建会话时按项目变量定义固化',
     `title`               VARCHAR(256)     NOT NULL DEFAULT '' COMMENT '对话标题',
     `summary`             MEDIUMTEXT       NULL COMMENT '会话滚动摘要，用于压缩长期历史',
     `model_provider`      VARCHAR(64)      NOT NULL DEFAULT '' COMMENT '模型提供商',
@@ -64,7 +65,7 @@ CREATE TABLE IF NOT EXISTS `agent_conversation_info` (
     PRIMARY KEY (`id`),
     UNIQUE KEY `uk_conversation_code` (`conversation_code`, `is_delete`),
     KEY `idx_project_user` (`project_id`, `user_id`, `state`, `is_delete`),
-    KEY `idx_product_context` (`product_code`, `bloc_code`, `hotel_code`, `is_delete`),
+    KEY `idx_product_context` (`product_code`, `is_delete`),
     KEY `idx_last_message_time` (`last_message_time`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='会话记录表';
 

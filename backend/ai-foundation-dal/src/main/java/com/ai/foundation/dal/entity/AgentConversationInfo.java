@@ -21,13 +21,11 @@ public class AgentConversationInfo {
 
     private String productCode;
 
-    private String blocCode;
-
-    private String hotelCode;
-
     private String conversationCode;
 
     private Long userId;
+
+    private String contextVariables;
 
     private String title;
 
