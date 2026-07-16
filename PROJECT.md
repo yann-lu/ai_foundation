@@ -79,8 +79,9 @@ ai-foundation-parent (pom)
 ### Playground 测试台
 - 页面路径：`/playground`，面向后台开发与调试人员。
 - 交互流程：选择项目 → 新建或选择历史会话 → 输入可选 System Prompt → 发送用户消息 → 通过 `/chat/runs/create` + `/chat/runs/events` 订阅 Run 事件。
-- 流式能力：使用浏览器 `EventSource` 消费 SSE，实时展示 `run_start`、`chat_start`、`chat_token`、`chat_complete`、`run_complete`、`run_error`、`run_cancelled`。
-- 思考链路：当前后端未单独定义 reasoning 事件，前端解析模型文本中的 `<think>...</think>` 片段并在消息折叠区与右侧 Inspector 中展示。
+- 流式能力：使用浏览器 `EventSource` 消费 SSE，实时展示 `run_start`、`chat_start`、`request_messages`、`chat_token`、`chat_complete`、`run_complete`、`run_error`、`run_cancelled`。
+- 调试可观测：后端在模型调用前通过 `request_messages` 推送真实请求消息栈（系统提示词、历史消息、当前用户消息）；右侧 Run Inspector 默认展示 Messages 视图，可查看真实发送内容、AI 思考与 AI 回复，Trace 视图保留原 Run 生命周期时间线。
+- 思考链路：后端优先推送模型返回的 `reasoning_content` 为 `chat_reasoning` 事件；如模型仅在正文中输出 `<think>...</think>`，前端会解析该片段并在消息折叠区与右侧 Inspector 中展示。
 
 | 方法 | 路径 | 说明 | 鉴权 |
 | --- | --- | --- | --- |
@@ -157,7 +158,7 @@ npm run build        # 类型检查 + 生产构建
 基于 assistant-ui（React 19 + Vite 6 + Tailwind v4）的独立 Playground 调试台，对接现有 Run 事件模型。
 - 对话流式：通过 `useExternalStoreRuntime` 适配器消费 `/chat/runs/events` SSE，`chat_token` 逐 token 渲染。
 - 思考过程：解析模型输出中的 `<think>...</think>` 片段为 reasoning 消息 part，流式实时展示。
-- Run Inspector：右侧面板展示 Run 生命周期事件，并折叠 chat_token 噪音聚合计数。
+- Run Inspector：右侧面板提供 Messages / Trace 双视图；Messages 展示真实模型请求消息栈、AI 思考、AI 回复，Trace 展示 Run 生命周期事件并折叠 chat_token 噪音聚合计数。
 - 会话管理：左侧侧栏选择项目、新建/选择历史会话、System Prompt 临时覆盖。
 
 核心对接逻辑在 `frontend-playground/src/runtime/aui-runtime.ts`（`useAiRuntime` 钩子），通过 `onNew` 回调串联 createRun + EventSource。

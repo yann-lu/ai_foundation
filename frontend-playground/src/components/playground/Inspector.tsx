@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import type { RunEventLog, RunMeta } from '@/runtime/aui-runtime'
 import { cn } from '@/lib/utils'
+import { parseThink } from '@/lib/think-parser'
 import {
   Play, User, Brain, MessageSquare, FileText, Wrench, CheckCircle2,
-  XCircle, AlertCircle, ChevronDown,
+  XCircle, AlertCircle, ChevronDown, Bot, ScrollText,
 } from 'lucide-react'
 import {
   Collapsible, CollapsibleTrigger, CollapsibleContent,
@@ -28,6 +29,11 @@ interface TimelineStep {
   count?: number
 }
 
+interface RequestMessage {
+  role: string
+  content: string
+}
+
 function formatTime(t: number): string {
   return new Date(t).toLocaleTimeString('zh-CN', {
     hour: '2-digit', minute: '2-digit', second: '2-digit',
@@ -41,6 +47,7 @@ function durationLabel(start: number, end: number): string {
 }
 
 export function Inspector({ runEvents, runMeta }: Props) {
+  const [view, setView] = useState<'messages' | 'trace'>('messages')
   const tokenCount = runEvents.filter((e) => e.eventType === 'chat_token').length
   const reasoningCount = runEvents.filter((e) => e.eventType === 'chat_reasoning').length
   const duration = runMeta
@@ -48,9 +55,21 @@ export function Inspector({ runEvents, runMeta }: Props) {
     : '--'
 
   const steps = useMemo(() => buildTimeline(runEvents), [runEvents])
+  const requestMessages = useMemo(() => extractRequestMessages(runEvents), [runEvents])
+  const rawResponseText = useMemo(() => {
+    const complete = [...runEvents].reverse().find((e) => e.eventType === 'run_complete')
+    if (typeof complete?.data === 'string' && complete.data) return complete.data
+    return collectText(runEvents, 'chat_token')
+  }, [runEvents])
+  const parsedResponse = useMemo(() => parseThink(rawResponseText), [rawResponseText])
+  const reasoningText = useMemo(() => {
+    const reasoning = collectText(runEvents, 'chat_reasoning')
+    return reasoning || parsedResponse.reasoning
+  }, [runEvents, parsedResponse.reasoning])
+  const responseText = parsedResponse.answer
 
   return (
-    <aside className="bg-card border-border flex w-96 shrink-0 flex-col border-l">
+    <aside className="bg-card border-border flex w-[28rem] shrink-0 flex-col border-l">
       {/* Header */}
       <div className="border-border border-b px-4 py-3">
         <h2 className="text-foreground text-sm font-semibold">Run Inspector</h2>
@@ -75,23 +94,184 @@ export function Inspector({ runEvents, runMeta }: Props) {
         </div>
       </div>
 
-      {/* Timeline */}
-      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {steps.length === 0 ? (
-          <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3">
-            <Brain className="size-8 opacity-30" />
-            <p className="text-xs">发送消息后，执行过程将显示在这里</p>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {steps.map((step) => (
-              <TimelineCard key={step.id} step={step} />
-            ))}
-          </div>
-        )}
+      <div className="border-border flex gap-1 border-b px-3 py-2">
+        <button
+          type="button"
+          onClick={() => setView('messages')}
+          className={cn(
+            'flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+            view === 'messages'
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+          )}
+        >
+          <ScrollText className="size-3.5" /> Messages
+        </button>
+        <button
+          type="button"
+          onClick={() => setView('trace')}
+          className={cn(
+            'flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-xs font-medium transition-colors',
+            view === 'trace'
+              ? 'bg-primary text-primary-foreground'
+              : 'text-muted-foreground hover:bg-accent hover:text-foreground',
+          )}
+        >
+          <Play className="size-3.5" /> Trace
+        </button>
       </div>
+
+      {view === 'messages' ? (
+        <MessageStack
+          requestMessages={requestMessages}
+          reasoningText={reasoningText}
+          responseText={responseText}
+          hasEvents={runEvents.length > 0}
+        />
+      ) : (
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          {steps.length === 0 ? (
+            <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-3">
+              <Brain className="size-8 opacity-30" />
+              <p className="text-xs">发送消息后，执行过程将显示在这里</p>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {steps.map((step) => (
+                <TimelineCard key={step.id} step={step} />
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </aside>
   )
+}
+
+function MessageStack({
+  requestMessages,
+  reasoningText,
+  responseText,
+  hasEvents,
+}: {
+  requestMessages: RequestMessage[]
+  reasoningText: string
+  responseText: string
+  hasEvents: boolean
+}) {
+  if (!hasEvents) {
+    return (
+      <div className="text-muted-foreground flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+        <ScrollText className="size-8 opacity-30" />
+        <p className="text-xs">发送消息后，这里会展示真实请求消息栈、模型思考与最终回复</p>
+      </div>
+    )
+  }
+
+  return (
+    <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <section className="space-y-2">
+        <div className="flex items-center justify-between">
+          <h3 className="text-foreground text-xs font-semibold">真实发送给模型</h3>
+          <span className="text-muted-foreground font-mono text-[11px]">{requestMessages.length} messages</span>
+        </div>
+        {requestMessages.length > 0 ? (
+          <div className="space-y-2">
+            {requestMessages.map((message, index) => (
+              <MessageBlock key={`${message.role}-${index}`} message={message} index={index} />
+            ))}
+          </div>
+        ) : (
+          <div className="border-border bg-muted/30 text-muted-foreground rounded-lg border px-3 py-3 text-xs">
+            当前后端未返回请求消息栈。请确认 SSE 中是否包含 request_messages 事件。
+          </div>
+        )}
+      </section>
+
+      <section className="mt-4 space-y-2">
+        <h3 className="text-foreground text-xs font-semibold">模型输出</h3>
+        <OutputBlock
+          icon={Brain}
+          label="AI 思考"
+          content={reasoningText}
+          empty="未捕获到 reasoning_content 或 <think> 片段"
+          className="border-purple-500/20 bg-purple-500/5"
+          iconClassName="bg-purple-500/10 text-purple-500"
+        />
+        <OutputBlock
+          icon={Bot}
+          label="AI 回复"
+          content={responseText}
+          empty="回复内容等待中"
+          className="border-emerald-500/20 bg-emerald-500/5"
+          iconClassName="bg-emerald-500/10 text-emerald-500"
+        />
+      </section>
+    </div>
+  )
+}
+
+function MessageBlock({ message, index }: { message: RequestMessage; index: number }) {
+  const roleClass = getRoleClass(message.role)
+  const Icon = message.role === 'assistant' ? Bot : message.role === 'system' ? FileText : User
+
+  return (
+    <div className={cn('rounded-lg border px-3 py-2.5', roleClass.card)}>
+      <div className="mb-2 flex items-center gap-2">
+        <span className={cn('flex size-6 items-center justify-center rounded-md', roleClass.icon)}>
+          <Icon className="size-3.5" />
+        </span>
+        <span className="text-foreground text-xs font-semibold uppercase">{message.role}</span>
+        <span className="text-muted-foreground ml-auto font-mono text-[11px]">#{index + 1}</span>
+      </div>
+      <pre className="text-foreground/85 max-h-80 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed">
+        {message.content || '(empty)'}
+      </pre>
+    </div>
+  )
+}
+
+function OutputBlock({
+  icon: Icon,
+  label,
+  content,
+  empty,
+  className,
+  iconClassName,
+}: {
+  icon: typeof Play
+  label: string
+  content: string
+  empty: string
+  className: string
+  iconClassName: string
+}) {
+  return (
+    <div className={cn('rounded-lg border px-3 py-2.5', className)}>
+      <div className="mb-2 flex items-center gap-2">
+        <span className={cn('flex size-6 items-center justify-center rounded-md', iconClassName)}>
+          <Icon className="size-3.5" />
+        </span>
+        <span className="text-foreground text-xs font-semibold">{label}</span>
+      </div>
+      <pre className={cn(
+        'max-h-80 overflow-y-auto whitespace-pre-wrap break-words font-mono text-xs leading-relaxed',
+        content ? 'text-foreground/85' : 'text-muted-foreground',
+      )}>
+        {content || empty}
+      </pre>
+    </div>
+  )
+}
+
+function getRoleClass(role: string): { card: string; icon: string } {
+  if (role === 'system') {
+    return { card: 'border-amber-500/20 bg-amber-500/5', icon: 'bg-amber-500/10 text-amber-500' }
+  }
+  if (role === 'assistant') {
+    return { card: 'border-emerald-500/20 bg-emerald-500/5', icon: 'bg-emerald-500/10 text-emerald-500' }
+  }
+  return { card: 'border-blue-500/20 bg-blue-500/5', icon: 'bg-blue-500/10 text-blue-500' }
 }
 
 function TimelineCard({ step }: { step: TimelineStep }) {
@@ -158,8 +338,6 @@ function buildTimeline(events: RunEventLog[]): TimelineStep[] {
   const steps: TimelineStep[] = []
   if (events.length === 0) return steps
 
-  const firstTs = events[0].timestamp
-
   // 1. Lifecycle start
   const startEvents = events.filter(
     (e) => e.eventType === 'run_start' || e.eventType === 'chat_start',
@@ -175,6 +353,23 @@ function buildTimeline(events: RunEventLog[]): TimelineStep[] {
       startTime: startEvents[0].timestamp,
       endTime: startEvents[startEvents.length - 1].timestamp,
       content: null,
+    })
+  }
+
+  const requestEvent = events.find((e) => e.eventType === 'request_messages')
+  if (requestEvent) {
+    const requestMessages = extractRequestMessages(events)
+    steps.push({
+      id: 'request_messages',
+      icon: ScrollText,
+      label: '模型请求消息栈',
+      color: 'bg-amber-500/10 text-amber-500',
+      bgColor: 'bg-amber-500/5',
+      borderColor: 'border-amber-500/20',
+      startTime: requestEvent.timestamp,
+      endTime: requestEvent.timestamp,
+      content: requestMessages.map((m) => `[${m.role}]\n${m.content}`).join('\n\n---\n\n'),
+      count: requestMessages.length,
     })
   }
 
@@ -333,4 +528,26 @@ function buildTimeline(events: RunEventLog[]): TimelineStep[] {
   }
 
   return steps
+}
+
+function extractRequestMessages(events: RunEventLog[]): RequestMessage[] {
+  const event = [...events].reverse().find((item) => item.eventType === 'request_messages')
+  if (!Array.isArray(event?.data)) return []
+
+  return event.data
+    .map((item) => {
+      if (!item || typeof item !== 'object') return null
+      const record = item as Record<string, unknown>
+      const role = typeof record.role === 'string' ? record.role : 'unknown'
+      const content = typeof record.content === 'string' ? record.content : ''
+      return { role, content }
+    })
+    .filter((item): item is RequestMessage => item != null)
+}
+
+function collectText(events: RunEventLog[], eventType: RunEventLog['eventType']): string {
+  return events
+    .filter((e) => e.eventType === eventType)
+    .map((e) => String(e.data ?? ''))
+    .join('')
 }

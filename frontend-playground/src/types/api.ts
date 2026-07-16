@@ -88,7 +88,7 @@ export interface CreateRunResponse {
 }
 
 export type RunEventType =
-  | 'run_start' | 'chat_start' | 'user_message' | 'chat_reasoning' | 'chat_token' | 'chat_complete'
+  | 'run_start' | 'chat_start' | 'request_messages' | 'user_message' | 'chat_reasoning' | 'chat_token' | 'chat_complete'
   | 'summary_update' | 'tool_call' | 'tool_result'
   | 'run_complete' | 'run_error' | 'run_cancelled'
 

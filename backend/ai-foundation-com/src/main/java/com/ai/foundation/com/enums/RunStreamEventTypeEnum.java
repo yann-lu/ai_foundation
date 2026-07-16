@@ -9,6 +9,7 @@ public enum RunStreamEventTypeEnum {
 
     RUN_START("run_start"),
     CHAT_START("chat_start"),
+    REQUEST_MESSAGES("request_messages"),
     USER_MESSAGE("user_message"),
     CHAT_REASONING("chat_reasoning"),
     CHAT_TOKEN("chat_token"),

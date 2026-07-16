@@ -45,7 +45,7 @@ npm run dev
 
 ### 功能页面
 - 项目配置、模型配置、会话管理（管理后台菜单）
-- Playground：对话后台测试台，支持项目/历史会话切换、System Prompt 临时覆盖、Run SSE 事件时间线、逐 token 流式输出，以及解析 `<think>...</think>` 思考链路
+- Playground：对话后台测试台，支持项目/历史会话切换、System Prompt 临时覆盖、Run SSE 事件时间线、真实模型请求消息栈、逐 token 流式输出，以及解析 `<think>...</think>` / `reasoning_content` 思考链路
 - Project 固定系统提示词与变量：项目配置中维护 `system_prompt`、`prompt_variables`，创建会话时写入变量快照，设计见 `docs/project-prompt-variables-design.md`
 
 

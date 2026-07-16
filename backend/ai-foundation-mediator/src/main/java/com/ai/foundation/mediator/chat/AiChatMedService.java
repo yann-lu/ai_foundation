@@ -31,6 +31,7 @@ import reactor.core.publisher.Flux;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Locale;
 
 @Slf4j
 @Service
@@ -145,7 +146,7 @@ public class AiChatMedService {
      * @return 分离后的 chunk 流
      */
     public Flux<ChatStreamChunk> streamChunks(AgentConversationInfo conversation, String userMessage,
-                                               String systemPrompt, String modelName) {
+                                                String systemPrompt, String modelName) {
         String resolvedModel = resolveModelName(modelName, conversation);
         ChatClient chatClient = buildChatClient(resolvedModel, null, null);
         List<Message> messages = buildMessages(conversation, systemPrompt, userMessage);
@@ -155,6 +156,21 @@ public class AiChatMedService {
                 .chatResponse()
                 .map(this::toChunk)
                 .doOnError(e -> log.error("streamChunks 失败 model={} msg={}", resolvedModel, extractErrorMsg(e)));
+    }
+
+    /**
+     * 构建实际发送给模型的消息栈，用于 Run Inspector 调试展示。
+     *
+     * @param conversation 会话
+     * @param userMessage 用户消息
+     * @param systemPrompt 系统提示词（可选）
+     * @return 模型请求消息栈
+     */
+    public List<ChatRequestMessage> buildRequestMessages(AgentConversationInfo conversation, String userMessage,
+                                                          String systemPrompt) {
+        return buildMessages(conversation, systemPrompt, userMessage).stream()
+                .map(this::toRequestMessage)
+                .toList();
     }
 
     private String callModel(String modelName, ChatClient chatClient, List<Message> messages) {
@@ -185,8 +201,13 @@ public class AiChatMedService {
             }
             cur = cur.getCause();
         }
-       return e.getClass().getSimpleName() + ": " + e.getMessage();
-   }
+        return e.getClass().getSimpleName() + ": " + e.getMessage();
+    }
+
+    private ChatRequestMessage toRequestMessage(Message message) {
+        String role = message.getMessageType().name().toLowerCase(Locale.ROOT);
+        return new ChatRequestMessage(role, message.getText());
+    }
 
     /**
      * 将 Spring AI 的 {@link ChatResponse} 转换为 {@link ChatStreamChunk}，

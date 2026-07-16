@@ -11,6 +11,7 @@ import com.ai.foundation.dal.entity.AgentRun;
 import com.ai.foundation.mediator.chat.AiChatMedService;
 import com.ai.foundation.mediator.chat.ConversationSummaryService;
 import com.ai.foundation.mediator.chat.ChatStreamChunk;
+import com.ai.foundation.mediator.chat.ChatRequestMessage;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -55,12 +56,16 @@ public class AgentOrchestrator {
         String conversationCode = conversation.getConversationCode();
         long startTime = System.currentTimeMillis();
         StringBuilder contentBuilder = new StringBuilder();
+        List<ChatRequestMessage> requestMessages = aiChatMedService
+                .buildRequestMessages(conversation, userMessage, systemPrompt);
 
         Flux<RunStreamEnvelope> startEvents = Flux.just(
                 envelope(runCode, conversationCode, RunStreamEventTypeEnum.RUN_START,
                         RunStateEnum.EXECUTING.getCode(), null),
                 envelope(runCode, conversationCode, RunStreamEventTypeEnum.CHAT_START,
                         RunStateEnum.EXECUTING.getCode(), null),
+                envelope(runCode, conversationCode, RunStreamEventTypeEnum.REQUEST_MESSAGES,
+                        RunStateEnum.EXECUTING.getCode(), requestMessages),
                 envelope(runCode, conversationCode, RunStreamEventTypeEnum.USER_MESSAGE,
                         RunStateEnum.EXECUTING.getCode(), userMessage)
         );
