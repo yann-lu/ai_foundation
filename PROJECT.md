@@ -52,7 +52,7 @@ ai-foundation-parent (pom)
 ### 阶段 1
 - **登录鉴权**：`POST /admin/auth/login`（配置账号），`AdminAuthWebFilter` 校验 `x-admin-token`，token 存 Redis（8h TTL），`/admin/*` 未授权返回 401。
 - **项目管理**：`agent_project` 表；分页/详情/新增/修改/删除接口；`project_code` 唯一校验；软删。
-- **Project 固定系统提示词**：`agent_project.system_prompt` 支持项目维度固定提示词，`prompt_variables` 定义项目所需上下文变量；创建会话时校验并固化变量快照。
+- **Project 固定系统提示词**：`agent_project.system_prompt` 支持项目维度固定提示词，`prompt_variables` 定义项目所需上下文变量；创建会话时校验并固化变量快照，调用模型时由 Spring AI Advisor 注入最终系统提示词。
 - **模型配置管理**：`agent_model_config` 表；分页/详情/新增/修改/删除；按项目筛选；模型类型 CHAT/EMBEDDING。
 - **AgentModelResolver** 雏形：按项目读取启用模型，未配置时回退系统默认（`agent.ai.models`）。
 - **管理后台前端**：Vue3 + Element Plus；登录页（token 存 localStorage）；请求拦截器自动携带 `x-admin-token`；可折叠侧边栏布局；项目配置页（列表/搜索/分页/增删改弹窗/状态标签）；模型配置页（按项目筛选/增删改）。
@@ -62,10 +62,15 @@ ai-foundation-parent (pom)
 - **会话与消息表**：`agent_conversation_info`（会话编码、项目/产品上下文、通用变量快照、模型信息、置顶、状态）+ `agent_message_info`（角色、内容、token 数、耗时、附件、客户端 IP）。
 - **会话管理**：`AgentConversationMedService` 实现创建会话（按 productCode 查项目）、分页列表、详情（含消息）、删除（级联软删消息）、清空消息。`AgentMessageMedService` 实现最近消息、滚动消息。
 - **会话编码生成**：`ConversationCodeGenerator`（`conv_` + 时间戳 + 随机串）。
-- **同步 Chat**：`AiChatMedService.syncChat`，使用 Spring AI ChatClient 调用 OpenAI 兼容接口；支持 `modelName`、`systemPrompt`、`temperature`、`maxTokens`；加载历史消息构建上下文；保存 user/assistant 消息。
+- **同步 Chat**：`AiChatMedService.syncChat`，使用 Spring AI ChatClient 调用 OpenAI 兼容接口；支持 `modelName`、`systemPrompt`、`temperature`、`maxTokens`；加载历史消息构建上下文，并通过 `ProjectSystemPromptAdvisor` 注入项目系统提示词、会话变量上下文和摘要；保存 user/assistant 消息。
 - **流式 Chat（SSE）**：`AiChatMedService.streamChat`，返回 `Flux<ServerSentEvent>`；事件类型 start/token/complete/error；流式完成后保存完整 assistant 消息。
 - **ChatClient 手动配置**：`AiClientConfig` 手动创建 `OpenAiApi` → `OpenAiChatModel` → `ChatClient` Bean（`@ConditionalOnMissingBean` 不覆盖自动配置）。
 - **管理后台前端**：新增「会话管理」页（分页/详情/清空/删除）+「Playground」页（选择项目→创建会话→流式对话，SSE 逐 token 展示）。Playground 已重构为对话后台测试台，支持历史会话侧栏、System Prompt 临时覆盖、Run 状态面板、SSE 事件时间线，以及解析模型输出中的 `<think>...</think>` 思考链路。
+
+### 阶段 3
+- **Run 与事件流**：`AgentRunMedService` + `AgentOrchestrator`，Run 为一次对话执行单元，支持创建/流式事件订阅/取消/确认；SSE 事件类型覆盖 run_start、chat_start、request_messages、user_message、chat_reasoning、chat_token、chat_complete、run_complete、run_error、run_cancelled。
+- **滚动增量摘要**：`ChatHistoryComposer` + `ConversationSummaryService`，Redis 热缓存保留最近 N 轮对话原文（默认 5 轮），超出时最老一轮异步挤出并调用 LLM 增量更新摘要；摘要写入 `agent_conversation_info.summary`，最大 800 字符；组装对话历史时近期轮次用原文、远期用摘要，既保留长会话上下文又控制 Token 用量。
+- **异步摘要线程池**：`SummaryAsyncConfig` 配置独立线程池（core 2/max 8/queue 200），`@Async` 执行增量摘要，不阻塞主对话流。
 
 ## 接口清单
 
@@ -80,6 +85,7 @@ ai-foundation-parent (pom)
 - 页面路径：`/playground`，面向后台开发与调试人员。
 - 交互流程：选择项目 → 新建或选择历史会话 → 输入可选 System Prompt → 发送用户消息 → 通过 `/chat/runs/create` + `/chat/runs/events` 订阅 Run 事件。
 - 流式能力：使用浏览器 `EventSource` 消费 SSE，实时展示 `run_start`、`chat_start`、`request_messages`、`chat_token`、`chat_complete`、`run_complete`、`run_error`、`run_cancelled`。
+- 提示词注入：模型调用前从当前会话的 `context_variables` 读取变量快照，替换 `agent_project.system_prompt` 中的 `{{变量}}`，再由 `ProjectSystemPromptAdvisor` 写入 Spring AI Prompt 的 system message。
 - 调试可观测：后端在模型调用前通过 `request_messages` 推送真实请求消息栈（系统提示词、历史消息、当前用户消息）；右侧 Run Inspector 默认展示 Messages 视图，可查看真实发送内容、AI 思考与 AI 回复，Trace 视图保留原 Run 生命周期时间线。
 - 思考链路：后端优先推送模型返回的 `reasoning_content` 为 `chat_reasoning` 事件；如模型仅在正文中输出 `<think>...</think>`，前端会解析该片段并在消息折叠区与右侧 Inspector 中展示。
 

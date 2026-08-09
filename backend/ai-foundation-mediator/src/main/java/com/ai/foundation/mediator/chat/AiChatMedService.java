@@ -29,7 +29,6 @@ import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
 
@@ -38,16 +37,16 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class AiChatMedService {
 
-    private static final int HISTORY_LIMIT = 20;
     private static final String DEFAULT_SYSTEM_PROMPT = "你是一个智能助手，请简洁、专业地回答用户问题。";
 
     private final ChatClient.Builder chatClientBuilder;
     private final AgentConversationMedService conversationMedService;
     private final AgentMessageService messageService;
     private final AgentModelResolver modelResolver;
-    private final ConversationSummaryService summaryService;
+    private final ChatHistoryComposer chatHistoryComposer;
     private final AgentProjectService projectService;
     private final ProjectPromptService projectPromptService;
+    private final ProjectSystemPromptAdvisor projectSystemPromptAdvisor;
 
     // ========================= 同步 Chat =========================
 
@@ -58,12 +57,13 @@ public class AiChatMedService {
 
         AgentMessageInfo userMsg = saveUserMessage(conversation.getId(), request.getUserMessage(), clientIp);
         ChatClient chatClient = buildChatClient(modelName, request.getTemperature(), request.getMaxTokens());
-        List<Message> messages = buildMessages(conversation, request.getSystemPrompt(), request.getUserMessage());
+        String systemPrompt = buildSystemPrompt(conversation, request.getSystemPrompt());
+        List<Message> messages = buildMessages(conversation, request.getUserMessage());
 
         long startTime = System.currentTimeMillis();
         String content;
         try {
-            content = callModel(modelName, chatClient, messages);
+            content = callModel(modelName, chatClient, messages, systemPrompt);
         } catch (Exception e) {
             log.error("同步对话调用模型失败 conversationCode={}", request.getConversationCode(), e);
             throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "模型调用失败: " + e.getMessage());
@@ -72,7 +72,7 @@ public class AiChatMedService {
 
         AgentMessageInfo assistantMsg = saveAssistantMessage(conversation.getId(), content, 0, duration);
         conversationMedService.touchLastMessage(conversation.getId(), modelName);
-        summaryService.updateSummary(conversation.getId(), request.getUserMessage(), content, modelName);
+        chatHistoryComposer.completeTurn(conversation.getId(), request.getUserMessage(), content, modelName);
         log.info("同步对话成功 conv={} userMsgId={} assistantMsgId={} duration={}ms",
                 conversation.getConversationCode(), userMsg.getId(), assistantMsg.getId(), duration);
         return new ChatSyncResponse(content, 0, duration, assistantMsg.getId());
@@ -87,13 +87,14 @@ public class AiChatMedService {
 
         saveUserMessage(conversation.getId(), request.getUserMessage(), clientIp);
         ChatClient chatClient = buildChatClient(modelName, request.getTemperature(), request.getMaxTokens());
-        List<Message> messages = buildMessages(conversation, request.getSystemPrompt(), request.getUserMessage());
+        String systemPrompt = buildSystemPrompt(conversation, request.getSystemPrompt());
+        List<Message> messages = buildMessages(conversation, request.getUserMessage());
 
         StringBuilder contentBuilder = new StringBuilder();
 
         return Flux.concat(
                 Flux.just(ChatStreamChunkDTO.of(ChatStreamEventTypeEnum.START)),
-                streamModel(modelName, chatClient, messages)
+                streamModel(modelName, chatClient, messages, systemPrompt)
                         .filter(StringUtils::isNotEmpty)
                         .doOnNext(contentBuilder::append)
                         .map(token -> ChatStreamChunkDTO.of(ChatStreamEventTypeEnum.TOKEN, token)),
@@ -101,7 +102,7 @@ public class AiChatMedService {
                     long duration = System.currentTimeMillis();
                     saveAssistantMessage(conversation.getId(), contentBuilder.toString(), 0, duration);
                     conversationMedService.touchLastMessage(conversation.getId(), modelName);
-                    summaryService.updateSummary(conversation.getId(),
+                    chatHistoryComposer.completeTurn(conversation.getId(),
                             request.getUserMessage(), contentBuilder.toString(), modelName);
                     return Flux.just(ChatStreamChunkDTO.of(ChatStreamEventTypeEnum.COMPLETE));
                 })
@@ -128,9 +129,10 @@ public class AiChatMedService {
                                      String systemPrompt, String modelName) {
         String resolvedModel = resolveModelName(modelName, conversation);
         ChatClient chatClient = buildChatClient(resolvedModel, null, null);
-        List<Message> messages = buildMessages(conversation, systemPrompt, userMessage);
-       return streamModel(resolvedModel, chatClient, messages)
-               .filter(StringUtils::isNotEmpty);
+        String resolvedSystemPrompt = buildSystemPrompt(conversation, systemPrompt);
+        List<Message> messages = buildMessages(conversation, userMessage);
+       return streamModel(resolvedModel, chatClient, messages, resolvedSystemPrompt)
+                .filter(StringUtils::isNotEmpty);
    }
 
     /**
@@ -149,9 +151,13 @@ public class AiChatMedService {
                                                 String systemPrompt, String modelName) {
         String resolvedModel = resolveModelName(modelName, conversation);
         ChatClient chatClient = buildChatClient(resolvedModel, null, null);
-        List<Message> messages = buildMessages(conversation, systemPrompt, userMessage);
+        String resolvedSystemPrompt = buildSystemPrompt(conversation, systemPrompt);
+        List<Message> messages = buildMessages(conversation, userMessage);
         return chatClient.prompt()
                 .messages(messages)
+                .advisors(advisor -> advisor
+                        .param(ProjectSystemPromptAdvisor.SYSTEM_PROMPT_CONTEXT_KEY, resolvedSystemPrompt)
+                        .advisors(projectSystemPromptAdvisor))
                 .stream()
                 .chatResponse()
                 .map(this::toChunk)
@@ -168,65 +174,15 @@ public class AiChatMedService {
      */
     public List<ChatRequestMessage> buildRequestMessages(AgentConversationInfo conversation, String userMessage,
                                                           String systemPrompt) {
-        return buildMessages(conversation, systemPrompt, userMessage).stream()
+        String resolvedSystemPrompt = buildSystemPrompt(conversation, systemPrompt);
+        List<Message> messages = new ArrayList<>();
+        if (StringUtils.isNotBlank(resolvedSystemPrompt)) {
+            messages.add(new SystemMessage(resolvedSystemPrompt));
+        }
+        messages.addAll(buildMessages(conversation, userMessage));
+        return messages.stream()
                 .map(this::toRequestMessage)
                 .toList();
-    }
-
-    private String callModel(String modelName, ChatClient chatClient, List<Message> messages) {
-        try {
-            return chatClient.prompt()
-                .messages(messages)
-                .call()
-                .content();
-        } catch (Exception e) {
-            log.error("callModel 失败 model={} msg={}", modelName, extractErrorMsg(e));
-            throw e;
-        }
-    }
-
-    private Flux<String> streamModel(String modelName, ChatClient chatClient, List<Message> messages) {
-        return chatClient.prompt()
-                .messages(messages)
-                .stream()
-                .content()
-                .doOnError(e -> log.error("streamModel 失败 model={} msg={}", modelName, extractErrorMsg(e)));
-    }
-
-    private String extractErrorMsg(Throwable e) {
-        Throwable cur = e;
-        while (cur != null) {
-            if (cur instanceof org.springframework.web.reactive.function.client.WebClientResponseException wcre) {
-                return wcre.getStatusCode() + " body=" + wcre.getResponseBodyAsString();
-            }
-            cur = cur.getCause();
-        }
-        return e.getClass().getSimpleName() + ": " + e.getMessage();
-    }
-
-    private ChatRequestMessage toRequestMessage(Message message) {
-        String role = message.getMessageType().name().toLowerCase(Locale.ROOT);
-        return new ChatRequestMessage(role, message.getText());
-    }
-
-    /**
-     * 将 Spring AI 的 {@link ChatResponse} 转换为 {@link ChatStreamChunk}，
-     * 分离 reasoning_content（思考链）与正文 content。
-     */
-    private ChatStreamChunk toChunk(ChatResponse response) {
-        if (response == null || response.getResult() == null) {
-            return new ChatStreamChunk(null, null);
-        }
-        Generation gen = response.getResult();
-        String content = gen.getOutput() != null ? gen.getOutput().getText() : null;
-        String reasoning = null;
-        if (gen.getMetadata() != null) {
-            Object rc = gen.getMetadata().get("reasoningContent");
-            if (rc instanceof String s && !s.isEmpty()) {
-                reasoning = s;
-            }
-        }
-        return new ChatStreamChunk(reasoning, content);
     }
 
     /**
@@ -267,30 +223,36 @@ public class AiChatMedService {
         return modelResolver.resolveChatModel(conversation.getProjectId());
     }
 
-    private List<Message> buildMessages(AgentConversationInfo conversation, String systemPrompt, String userMessage) {
-        List<AgentMessageInfo> history = messageService.recentMessages(conversation.getId(), HISTORY_LIMIT);
-        Collections.reverse(history);
+    private String buildSystemPrompt(AgentConversationInfo conversation, String requestSystemPrompt) {
+        AgentProject project = projectService.getById(conversation.getProjectId());
+        String summaryBlock = chatHistoryComposer.getSummaryBlock(conversation);
+        return projectPromptService.buildSystemPrompt(project, conversation,
+                summaryBlock, requestSystemPrompt, DEFAULT_SYSTEM_PROMPT);
+    }
+
+    /**
+     * 构建历史消息列表：从热缓存取最近 N 轮对话的原文。
+     * 当前用户消息（本次请求的 userMessage）会追加到末尾。
+     */
+    private List<Message> buildMessages(AgentConversationInfo conversation, String userMessage) {
+        List<ChatHistoryComposer.HotTurn> hotTurns = chatHistoryComposer.composeHistory(conversation);
 
         List<Message> messages = new ArrayList<>();
-        AgentProject project = projectService.getById(conversation.getProjectId());
-        String requestSystemPrompt = systemPrompt != null && !systemPrompt.isBlank() ? systemPrompt : null;
-        String summaryBlock = summaryService.formatSummaryBlock(conversation.getSummary());
-        String sys = projectPromptService.buildSystemPrompt(project, conversation,
-                summaryBlock, requestSystemPrompt, DEFAULT_SYSTEM_PROMPT);
-        messages.add(new SystemMessage(sys));
-
-        for (AgentMessageInfo msg : history) {
-            if ("user".equals(msg.getRole())) {
-                messages.add(new UserMessage(msg.getContent()));
-            } else if ("assistant".equals(msg.getRole())) {
-                messages.add(new AssistantMessage(msg.getContent()));
+        for (ChatHistoryComposer.HotTurn turn : hotTurns) {
+            if (StringUtils.isNotBlank(turn.getUser())) {
+                messages.add(new UserMessage(turn.getUser()));
+            }
+            if (StringUtils.isNotBlank(turn.getAssistant())) {
+                messages.add(new AssistantMessage(turn.getAssistant()));
             }
         }
-        AgentMessageInfo last = history.isEmpty() ? null : history.get(history.size() - 1);
-        boolean duplicateUser = last != null && "user".equals(last.getRole())
-                && userMessage.equals(last.getContent());
-        if (!duplicateUser) {
-            messages.add(new UserMessage(userMessage));
+        if (StringUtils.isNotBlank(userMessage)) {
+            Message last = messages.isEmpty() ? null : messages.get(messages.size() - 1);
+            boolean duplicateUser = last instanceof UserMessage
+                    && userMessage.equals(((UserMessage) last).getText());
+            if (!duplicateUser) {
+                messages.add(new UserMessage(userMessage));
+            }
         }
         return messages;
     }
@@ -316,5 +278,65 @@ public class AiChatMedService {
         msg.setState(1);
         messageService.save(msg);
         return msg;
+    }
+
+    private String callModel(String modelName, ChatClient chatClient, List<Message> messages, String systemPrompt) {
+        try {
+            return chatClient.prompt()
+                .messages(messages)
+                .advisors(advisor -> advisor
+                        .param(ProjectSystemPromptAdvisor.SYSTEM_PROMPT_CONTEXT_KEY, systemPrompt)
+                        .advisors(projectSystemPromptAdvisor))
+                .call()
+                .content();
+        } catch (Exception e) {
+            log.error("callModel 失败 model={} msg={}", modelName, extractErrorMsg(e));
+            throw new BusinessException(ResultCode.SERVICE_UNAVAILABLE, "模型调用失败: " + e.getMessage());
+        }
+    }
+
+    private Flux<String> streamModel(String modelName, ChatClient chatClient,
+                                     List<Message> messages, String systemPrompt) {
+        return chatClient.prompt()
+                .messages(messages)
+                .advisors(advisor -> advisor
+                        .param(ProjectSystemPromptAdvisor.SYSTEM_PROMPT_CONTEXT_KEY, systemPrompt)
+                        .advisors(projectSystemPromptAdvisor))
+                .stream()
+                .content()
+                .doOnError(e -> log.error("streamModel 失败 model={} msg={}", modelName, extractErrorMsg(e)));
+    }
+
+    private String extractErrorMsg(Throwable e) {
+        Throwable cause = e.getCause();
+        if (cause != null && cause.getMessage() != null) {
+            return cause.getClass().getSimpleName() + ": " + cause.getMessage();
+        }
+        return e.getClass().getSimpleName() + ": " + e.getMessage();
+    }
+
+    private ChatRequestMessage toRequestMessage(Message message) {
+        String role = message.getMessageType().name().toLowerCase(Locale.ROOT);
+        return new ChatRequestMessage(role, message.getText());
+    }
+
+    /**
+     * 将 Spring AI 的 {@link ChatResponse} 转换为 {@link ChatStreamChunk}，
+     * 分离 reasoning_content（思考链）与正文 content。
+     */
+    private ChatStreamChunk toChunk(ChatResponse response) {
+        if (response == null || response.getResult() == null) {
+            return new ChatStreamChunk(null, null);
+        }
+        Generation gen = response.getResult();
+        String content = gen.getOutput() != null ? gen.getOutput().getText() : null;
+        String reasoning = null;
+        if (gen.getMetadata() != null) {
+            Object rc = gen.getMetadata().get("reasoningContent");
+            if (rc instanceof String s && !s.isEmpty()) {
+                reasoning = s;
+            }
+        }
+        return new ChatStreamChunk(reasoning, content);
     }
 }

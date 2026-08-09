@@ -40,6 +40,15 @@ public class AgentRun {
 
     private BigDecimal cost;
 
+    /** 本次 Run 实际发给模型的完整消息栈 JSON（system + 摘要 + 历史 + 用户消息）。 */
+    private String requestMessages;
+
+    /** 模型最终回复正文（已剥离思考链）。 */
+    private String reply;
+
+    /** 思考链内容（reasoning_content 或 &lt;think&gt; 解析出）。 */
+    private String reasoning;
+
     @TableLogic
     private Integer isDelete;
 

@@ -1,5 +1,6 @@
 package com.ai.foundation.mediator.run;
 
+import com.ai.foundation.biz.conversation.AgentConversationService;
 import com.ai.foundation.biz.conversation.AgentMessageService;
 import com.ai.foundation.biz.run.AgentRunService;
 import com.ai.foundation.com.constant.RunTypeConstant;
@@ -35,6 +36,7 @@ public class AgentRunMedService {
     private final AgentConversationMedService conversationMedService;
     private final AgentMessageService messageService;
     private final AgentOrchestrator orchestrator;
+    private final AgentConversationService conversationService;
 
     /** 待执行 Run 参数，createRun 时存入，streamRunEvents 订阅时取出启动。 */
     private final ConcurrentMap<String, PendingRun> pendingRuns = new ConcurrentHashMap<>();
@@ -143,6 +145,23 @@ public class AgentRunMedService {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "Run不存在");
         }
         return run;
+    }
+
+    /**
+     * 获取会话最近一条成功的 Run（用于刷新页面后回填 Inspector）。
+     *
+     * @param conversationCode 会话编码
+     * @return 最近一条 Run，没有则返回 null
+     */
+    public AgentRun getLatestRunByConversation(String conversationCode) {
+        if (StringUtils.isBlank(conversationCode)) {
+            return null;
+        }
+        AgentConversationInfo conversation = conversationService.getByCode(conversationCode.trim());
+        if (conversation == null) {
+            return null;
+        }
+        return runService.getLatestByConversationId(conversation.getId());
     }
 
     /**

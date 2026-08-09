@@ -101,3 +101,15 @@ export interface RunStreamEnvelope {
   data: unknown
   traceId: string | null
 }
+
+export interface RunDetailResponse {
+  runCode: string
+  traceId: string | null
+  conversationCode: string
+  productCode: string
+  runType: string
+  taskState: string
+  requestMessages: Array<{ role: string; content: string }>
+  reply: string | null
+  reasoning: string | null
+}

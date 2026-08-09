@@ -19,4 +19,16 @@ public class AgentRunServiceImpl extends ServiceImpl<AgentRunMapper, AgentRun>
                 .eq(AgentRun::getRunCode, runCode.trim())
                 .last("limit 1"));
     }
+
+    @Override
+    public AgentRun getLatestByConversationId(Long conversationId) {
+        if (conversationId == null) {
+            return null;
+        }
+        return this.getOne(new LambdaQueryWrapper<AgentRun>()
+                .eq(AgentRun::getConversationId, conversationId)
+                .eq(AgentRun::getState, 1)
+                .orderByDesc(AgentRun::getId)
+                .last("limit 1"));
+    }
 }

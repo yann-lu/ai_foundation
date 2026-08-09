@@ -9,9 +9,11 @@ import com.ai.foundation.com.stream.RunStreamEnvelope;
 import com.ai.foundation.dal.entity.AgentConversationInfo;
 import com.ai.foundation.dal.entity.AgentRun;
 import com.ai.foundation.mediator.chat.AiChatMedService;
-import com.ai.foundation.mediator.chat.ConversationSummaryService;
+import com.ai.foundation.mediator.chat.ChatHistoryComposer;
 import com.ai.foundation.mediator.chat.ChatStreamChunk;
 import com.ai.foundation.mediator.chat.ChatRequestMessage;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -32,16 +34,17 @@ public class AgentOrchestrator {
     private final AiChatMedService aiChatMedService;
     private final AgentRunService runService;
     private final AgentMessageService messageService;
-    private final ConversationSummaryService summaryService;
+    private final ChatHistoryComposer chatHistoryComposer;
+    private final ObjectMapper objectMapper;
 
     /**
      * 响应式流式执行 Run，直接将模型 token 流通过 SSE 推送给客户端。
      *
      * <p>三段式 Flux.concat：
      * <ol>
-     *   <li>start — RUN_START / CHAT_START 事件</li>
-     *   <li>tokens — 模型流式 token，逐条映射为 CHAT_TOKEN 事件</li>
-     *   <li>end — 保存助手消息、更新摘要、更新 Run 状态，推送 CHAT_COMPLETE / RUN_COMPLETE</li>
+     *   <li>start — RUN_START / CHAT_START / REQUEST_MESSAGES / USER_MESSAGE 事件</li>
+     *   <li>tokens — 模型流式 token，逐条映射为 CHAT_REASONING / CHAT_TOKEN 事件</li>
+     *   <li>end — 保存助手消息、更新热缓存、写回 Run 详情（消息栈/回复/思考）、更新 Run 状态，推送 CHAT_COMPLETE / RUN_COMPLETE</li>
      * </ol>
      *
      * @param run          已持久化的 Run
@@ -56,6 +59,7 @@ public class AgentOrchestrator {
         String conversationCode = conversation.getConversationCode();
         long startTime = System.currentTimeMillis();
         StringBuilder contentBuilder = new StringBuilder();
+        StringBuilder reasoningBuilder = new StringBuilder();
         List<ChatRequestMessage> requestMessages = aiChatMedService
                 .buildRequestMessages(conversation, userMessage, systemPrompt);
 
@@ -76,6 +80,9 @@ public class AgentOrchestrator {
                     if (chunk.hasContent()) {
                         contentBuilder.append(chunk.content());
                     }
+                    if (chunk.hasReasoning()) {
+                        reasoningBuilder.append(chunk.reasoning());
+                    }
                 })
                 .flatMap(chunk -> {
                     List<RunStreamEnvelope> events = new ArrayList<>();
@@ -95,30 +102,24 @@ public class AgentOrchestrator {
        Flux<RunStreamEnvelope> endEvents = Mono
                .fromCallable(() -> {
                    String reply = contentBuilder.toString();
+                   String reasoning = reasoningBuilder.toString();
                    long duration = System.currentTimeMillis() - startTime;
-                   String summary = null;
                    if (StringUtils.isNotBlank(reply)) {
                        aiChatMedService.saveAssistantMessage(conversation, reply, duration);
-                       summary = summaryService.updateSummary(conversation.getId(),
+                       chatHistoryComposer.completeTurn(conversation.getId(),
                                userMessage, reply, conversation.getModelName());
                    }
+                   saveRunDetails(run, requestMessages, reply, reasoning);
                    updateRunState(run, RunTypeConstant.CHAT, RunStateEnum.COMPLETED, 1);
                    log.info("Run 完成 runCode={} duration={}ms replyLength={}", runCode, duration,
                            reply == null ? 0 : reply.length());
-                   return new Object[]{ reply, summary };
+                   return reply;
                })
                .subscribeOn(Schedulers.boundedElastic())
-               .flatMapMany(result -> {
-                   Object[] arr = (Object[]) result;
-                   String reply = (String) arr[0];
-                   String summary = (String) arr[1];
+               .flatMapMany(reply -> {
                    List<RunStreamEnvelope> events = new ArrayList<>();
                    events.add(envelope(runCode, conversationCode, RunStreamEventTypeEnum.CHAT_COMPLETE,
                            RunStateEnum.COMPLETED.getCode(), null));
-                   if (StringUtils.isNotBlank(summary)) {
-                       events.add(envelope(runCode, conversationCode, RunStreamEventTypeEnum.SUMMARY_UPDATE,
-                               RunStateEnum.COMPLETED.getCode(), summary));
-                   }
                    events.add(envelope(runCode, conversationCode, RunStreamEventTypeEnum.RUN_COMPLETE,
                            RunStateEnum.COMPLETED.getCode(), reply));
                   return Flux.fromIterable(events);
@@ -147,6 +148,25 @@ public class AgentOrchestrator {
     public void cancelRun(AgentRun run, String conversationCode) {
         updateRunState(run, run.getRunType(), RunStateEnum.CANCELLED, 2);
         log.info("Run 已取消 runCode={}", run.getRunCode());
+    }
+
+    /**
+     * 写回 Run 详情（消息栈 / 回复 / 思考链）到 agent_run 表，供刷新后 Inspector 还原。
+     */
+    private void saveRunDetails(AgentRun run, List<ChatRequestMessage> requestMessages,
+                                String reply, String reasoning) {
+        try {
+            AgentRun update = new AgentRun();
+            update.setId(run.getId());
+            update.setRequestMessages(objectMapper.writeValueAsString(requestMessages));
+            update.setReply(StringUtils.defaultString(reply));
+            update.setReasoning(StringUtils.defaultString(reasoning));
+            runService.updateById(update);
+        } catch (JsonProcessingException e) {
+            log.warn("序列化 requestMessages 失败 runCode={}", run.getRunCode(), e);
+        } catch (Exception e) {
+            log.warn("写回 Run 详情失败 runCode={}", run.getRunCode(), e);
+        }
     }
 
     private void updateRunState(AgentRun run, String runType, RunStateEnum state, int compatState) {

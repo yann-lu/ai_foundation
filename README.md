@@ -2,6 +2,25 @@
 
 Agent 编排平台 — 后端（Spring Boot 3 + WebFlux + Spring AI Alibaba）+ 管理后台（Vue3 + Element Plus）。
 
+## 一键启动
+
+```bash
+# 启动全部服务（后端 + 管理后台 + Playground）
+./start-all.sh
+
+# 停止全部服务
+./stop-all.sh
+```
+
+启动后访问：
+
+| 服务 | 地址 | 说明 |
+| --- | --- | --- |
+| 后端 API | http://localhost:8080 | Spring Boot WebFlux |
+| 健康检查 | http://localhost:8080/actuator/health | 返回 `{"status":"UP"}` 表示正常 |
+| 管理后台 | http://localhost:5173 | Vue3 + Element Plus，账号 `admin` / `admin123` |
+| Playground | http://localhost:5174 | React 对话调试台，支持流式输出与思考链路查看 |
+
 ## 快速开始
 
 ### 1. 环境要求
@@ -40,13 +59,14 @@ npm run dev
 ### 5. 访问地址
 - 后端：http://localhost:8080（健康检查 UP）
 - 前端：http://localhost:5173（浏览器访问，用 `admin` / `admin123` 登录）
+- Playground：http://localhost:5174（对话调试台）
 - 中间件：MySQL 9.x（localhost:3306，库 `ai_foundation`，用户 `ai_app` / `AiApp@2026`）、Redis 8.x（localhost:6379）
 - 模型服务：Ollama（localhost:11434，当前使用 `deepseek-r1:1.5b`）
 
 ### 功能页面
 - 项目配置、模型配置、会话管理（管理后台菜单）
 - Playground：对话后台测试台，支持项目/历史会话切换、System Prompt 临时覆盖、Run SSE 事件时间线、真实模型请求消息栈、逐 token 流式输出，以及解析 `<think>...</think>` / `reasoning_content` 思考链路
-- Project 固定系统提示词与变量：项目配置中维护 `system_prompt`、`prompt_variables`，创建会话时写入变量快照，设计见 `docs/project-prompt-variables-design.md`
+- Project 固定系统提示词与变量：项目配置中维护 `system_prompt`、`prompt_variables`，创建会话时写入变量快照，调用模型时通过 Spring AI Advisor 注入替换后的系统提示词，设计见 `docs/project-prompt-variables-design.md`
 
 
 ## 目录结构

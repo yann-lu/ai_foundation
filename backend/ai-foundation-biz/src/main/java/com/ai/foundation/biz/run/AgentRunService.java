@@ -6,4 +6,6 @@ import com.baomidou.mybatisplus.extension.service.IService;
 public interface AgentRunService extends IService<AgentRun> {
 
     AgentRun getByRunCode(String runCode);
+
+    AgentRun getLatestByConversationId(Long conversationId);
 }

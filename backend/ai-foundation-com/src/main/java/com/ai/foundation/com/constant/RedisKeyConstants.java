@@ -11,6 +11,7 @@ public final class RedisKeyConstants {
     public static final String PROJECT_CACHE = PREFIX + "project:";
     public static final String MODEL_CONFIG_CACHE = PREFIX + "model:config:";
     public static final String CAPABILITY_CATALOG = PREFIX + "capability:catalog";
+    public static final String CHAT_HOT_TURNS = PREFIX + "chat:hot:";
 
     public static String adminToken(String token) {
         return ADMIN_TOKEN + token;
@@ -18,5 +19,9 @@ public final class RedisKeyConstants {
 
     public static String projectCache(Long projectId) {
         return PROJECT_CACHE + projectId;
+    }
+
+    public static String chatHotTurns(Long conversationId) {
+        return CHAT_HOT_TURNS + conversationId;
     }
 }

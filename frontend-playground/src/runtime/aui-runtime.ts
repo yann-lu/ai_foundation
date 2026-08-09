@@ -6,7 +6,7 @@ import {
   type ThreadMessageLike,
   generateId,
 } from '@assistant-ui/react'
-import { createRun, streamRunEvents, cancelRun, getMessages } from '@/api/chat'
+import { createRun, streamRunEvents, cancelRun, getRunDetail, getMessages } from '@/api/chat'
 import { parseThink } from '@/lib/think-parser'
 import type { MessageDTO, RunStreamEnvelope } from '@/types/api'
 
@@ -78,6 +78,7 @@ export interface UseAiRuntimeResult {
   resetConversation: () => void
   loadHistory: (messages: MessageDTO[]) => void
   clearEvents: () => void
+  loadRunDetail: (runCode: string) => Promise<void>
 }
 
 export function useAiRuntime(): UseAiRuntimeResult {
@@ -290,6 +291,52 @@ export function useAiRuntime(): UseAiRuntimeResult {
     setRunMeta(null)
   }, [])
 
+  const loadRunDetail = useCallback(async (runCode: string) => {
+    if (!runCode) return
+    try {
+      const detail = await getRunDetail(runCode)
+      const startedAt = Date.now() - 1000 * 30
+      const finishedAt = Date.now()
+      setRunMeta({ runCode, startedAt, finishedAt })
+      const events: RunEventLog[] = []
+      if (detail.requestMessages?.length) {
+        events.push({
+          eventType: 'request_messages',
+          taskState: 'COMPLETED',
+          dataPreview: `${detail.requestMessages.length} messages`,
+          data: detail.requestMessages,
+          timestamp: startedAt,
+        })
+      }
+      if (detail.reasoning) {
+        events.push({
+          eventType: 'chat_reasoning',
+          taskState: 'COMPLETED',
+          dataPreview: detail.reasoning.slice(0, 140),
+          data: detail.reasoning,
+          timestamp: startedAt + 1000,
+        })
+      }
+      events.push({
+        eventType: 'chat_token',
+        taskState: 'COMPLETED',
+        dataPreview: (detail.reply || '').slice(0, 140),
+        data: detail.reply || '',
+        timestamp: finishedAt - 1000,
+      })
+      events.push({
+        eventType: 'run_complete',
+        taskState: detail.taskState || 'COMPLETED',
+        dataPreview: (detail.reply || '').slice(0, 140),
+        data: detail.reply || '',
+        timestamp: finishedAt,
+      })
+      setRunEvents(events)
+    } catch {
+      /* detail 加载失败不影响使用，Inspector 留空 */
+    }
+  }, [])
+
   const runtime = useExternalStoreRuntime<ThreadMessageLike>({
     messages,
     isRunning,
@@ -312,6 +359,7 @@ export function useAiRuntime(): UseAiRuntimeResult {
     resetConversation,
     loadHistory,
     clearEvents,
+    loadRunDetail,
   }
 }
 

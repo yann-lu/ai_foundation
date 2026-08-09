@@ -18,6 +18,7 @@ import com.ai.foundation.facade.dto.conversation.ConversationPageRequest;
 import com.ai.foundation.facade.dto.conversation.MessageDTO;
 import com.ai.foundation.mediator.model.AgentModelResolver;
 import com.ai.foundation.mediator.prompt.ProjectPromptService;
+import com.ai.foundation.mediator.chat.ChatHistoryComposer;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -41,6 +42,7 @@ public class AgentConversationMedService {
     private final ProjectPromptService projectPromptService;
     private final ConversationConverter conversationConverter;
     private final MessageConverter messageConverter;
+    private final ChatHistoryComposer chatHistoryComposer;
 
     public ConversationDTO create(ConversationCreateRequest request) {
         AgentProject project = projectService.getByCode(request.getProductCode());
@@ -94,6 +96,7 @@ public class AgentConversationMedService {
         }
         conversationService.removeById(id);
         messageService.softDeleteByConversationId(id);
+        chatHistoryComposer.clearCache(id);
         log.info("删除会话 id={} 含消息", id);
     }
 
@@ -106,6 +109,7 @@ public class AgentConversationMedService {
         conversation.setLastMessageTime(null);
         conversation.setSummary(null);
         conversationService.updateById(conversation);
+        chatHistoryComposer.clearCache(id);
         log.info("清空会话消息 id={}", id);
     }
 

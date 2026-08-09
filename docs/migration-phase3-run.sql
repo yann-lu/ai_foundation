@@ -24,3 +24,9 @@ CREATE TABLE IF NOT EXISTS `agent_run` (
     KEY `idx_trace_id` (`trace_id`),
     KEY `idx_message_id` (`message_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Agent总调度执行流水表';
+
+-- Run 详情持久化（刷新后 Inspector 回填）
+ALTER TABLE `agent_run`
+    ADD COLUMN `request_messages` TEXT NULL COMMENT '本次Run发给模型的完整消息栈JSON，供Inspector回放' AFTER `cost`,
+    ADD COLUMN `reply` MEDIUMTEXT NULL COMMENT '模型最终回复正文' AFTER `request_messages`,
+    ADD COLUMN `reasoning` MEDIUMTEXT NULL COMMENT '思考链内容' AFTER `reply`;

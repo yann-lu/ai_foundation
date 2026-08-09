@@ -43,6 +43,11 @@ agent:
   retrieval:
     top-k: 5
     similarity-threshold: 0.6
+  conversation:
+    hot-turns: 5
+    max-summary-chars: 800
+    hot-cache-ttl-seconds: 604800
+    summary-model: deepseek-v4-flash
   admin:
     accounts:
       - username: admin

@@ -5,7 +5,7 @@ import { Sidebar } from '@/components/playground/Sidebar'
 import { Inspector } from '@/components/playground/Inspector'
 import { pageProjects } from '@/api/project'
 import { pageConversations, createConversation } from '@/api/conversation'
-import { getMessages } from '@/api/chat'
+import { getMessages, getLatestRun } from '@/api/chat'
 import type { AgentProjectDTO, ConversationDTO } from '@/types/api'
 import { Plus, Sun, Moon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -152,11 +152,15 @@ export default function Playground({ nickname, onLogout }: Props) {
       try {
         const msgs = await getMessages(conv.conversationCode)
         ai.loadHistory(msgs)
+        const latest = await getLatestRun(conv.conversationCode)
+        if (latest?.runCode) {
+          ai.loadRunDetail(latest.runCode)
+        }
       } catch {
         /* ignore */
       }
     },
-    [ai],
+    [ai, getLatestRun],
   )
 
   const activeProject = projects.find((p) => p.projectCode === projectCode)

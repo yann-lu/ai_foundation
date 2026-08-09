@@ -18,16 +18,17 @@ import java.util.List;
 /**
  * 会话滚动摘要服务。
  *
- * <p>每轮对话完成后，根据旧摘要 + 本轮 user/assistant 交互，
- * 调用 LLM 增量生成更新后的摘要，存入 conversation.summary 字段。
- * 摘要用于在后续对话中注入 system prompt，压缩长期历史上下文。
+ * <p>根据旧摘要 + 本轮 user/assistant 交互，调用 LLM 增量生成更新后的摘要，
+ * 存入 conversation.summary 字段。摘要用于在后续对话中注入 system prompt，
+ * 压缩长期历史上下文。
+ *
+ * <p>该服务由 {@link ChatHistoryComposer} 在热缓存溢出时异步调用，
+ * 而非每轮对话都直接同步调用。
  */
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ConversationSummaryService {
-
-    private static final int MAX_SUMMARY_CHARS = 800;
 
     private static final String SUMMARY_SYSTEM_PROMPT =
             "你是会话摘要助手。根据旧摘要与本轮对话，输出更新后的简洁中文摘要。"
@@ -37,18 +38,19 @@ public class ConversationSummaryService {
     private final ChatClient.Builder chatClientBuilder;
     private final AgentConversationService conversationService;
     private final AgentModelResolver modelResolver;
+    private final AgentConversationProperties conversationProperties;
 
     /**
      * 根据本轮对话增量更新会话摘要。
      *
-    * @param conversationId  会话主键
-    * @param userMessage      本轮用户输入
-    * @param assistantReply   本轮助手回复
-    * @param modelName        模型名称（可选，为空时从会话解析）
+     * @param conversationId  会话主键
+     * @param userMessage     本轮用户输入
+     * @param assistantReply  本轮助手回复
+     * @param modelName       模型名称（可选，为空时从会话解析）
      * @return 更新后的摘要内容，失败时返回 null
-    */
+     */
     public String updateSummary(Long conversationId, String userMessage,
-                              String assistantReply, String modelName) {
+                                String assistantReply, String modelName) {
         if (conversationId == null
                 || StringUtils.isBlank(userMessage)
                 || StringUtils.isBlank(assistantReply)) {
@@ -110,6 +112,10 @@ public class ConversationSummaryService {
     }
 
     private String resolveSummaryModel(String preferred, AgentConversationInfo conversation) {
+        String configured = conversationProperties.getSummaryModel();
+        if (StringUtils.isNotBlank(configured)) {
+            return configured.trim();
+        }
         if (StringUtils.isNotBlank(preferred)) {
             return preferred.trim();
         }
@@ -128,9 +134,10 @@ public class ConversationSummaryService {
     }
 
     private String truncateSummary(String summary) {
-        if (summary.length() <= MAX_SUMMARY_CHARS) {
+        int maxChars = conversationProperties.getMaxSummaryChars();
+        if (summary.length() <= maxChars) {
             return summary;
         }
-        return summary.substring(0, MAX_SUMMARY_CHARS) + "…";
+        return summary.substring(0, maxChars) + "…";
     }
 }

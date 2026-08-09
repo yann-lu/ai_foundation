@@ -18,15 +18,12 @@ spring:
       chat: openai
       embedding: openai
     openai:
-      api-key: sk-MNHC5WFsuXTSNOwdq40sP3i5JsA7422hMNuP9EnaZPFdfcKc
+      api-key: sk-0e4ac33162d44038ba556a5d0e084a13
       #base-url: http://localhost:11434
-      base-url: https://api.moonshot.cn
+      base-url: https://api.deepseek.com
       chat:
         options:
-          model: kimi-k2.6
-          extra-body:
-            thinking:
-              type: disabled
+          model: deepseek-v4-pro
       embedding:
         options:
           model: bge-m3
