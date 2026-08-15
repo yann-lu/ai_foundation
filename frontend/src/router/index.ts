@@ -18,6 +18,18 @@ const routes = [
         meta: { title: '项目配置' }
       },
       {
+        path: 'api-schema',
+        name: 'ApiSchema',
+        component: () => import('@/views/ApiSchemaList.vue'),
+        meta: { title: '网关服务配置' }
+      },
+      {
+        path: 'cli',
+        name: 'Cli',
+        component: () => import('@/views/CliList.vue'),
+        meta: { title: 'CLI 能力管理' }
+      },
+      {
         path: 'model',
         name: 'Model',
         component: () => import('@/views/ModelConfigList.vue'),

@@ -2,6 +2,8 @@ package com.ai.foundation.gateway.controller;
 
 import com.ai.foundation.com.response.ApiResponse;
 import com.ai.foundation.com.response.PageResult;
+import com.ai.foundation.facade.dto.cli.BindCapabilitiesRequest;
+import com.ai.foundation.facade.dto.cli.BindOptionsResponse;
 import com.ai.foundation.facade.dto.project.AgentProjectDTO;
 import com.ai.foundation.facade.dto.project.AgentProjectPageRequest;
 import com.ai.foundation.facade.dto.project.AgentProjectSaveRequest;
@@ -56,6 +58,22 @@ public class AdminProjectController {
         return MonoUtils.fromBlocking(() -> {
             projectMedService.delete(id, AdminContext.currentOperator(exchange));
             return ApiResponse.<Void>success();
+        });
+    }
+
+    @GetMapping("/{id}/bindOptions")
+    public Mono<ApiResponse<BindOptionsResponse>> listBindOptions(@PathVariable Long id) {
+        return MonoUtils.fromBlocking(() -> projectMedService.listBindOptions(id))
+                .map(ApiResponse::success);
+    }
+
+    @PostMapping("/bindCapabilities")
+    public Mono<ApiResponse<Boolean>> bindCapabilities(@Valid @RequestBody BindCapabilitiesRequest request,
+                                                        ServerWebExchange exchange) {
+        return MonoUtils.fromBlocking(() -> {
+            projectMedService.bindCapabilities(request.getId(), request.getCliIds(),
+                    AdminContext.currentOperator(exchange));
+            return ApiResponse.success(true);
         });
     }
 }

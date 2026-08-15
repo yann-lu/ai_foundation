@@ -4,7 +4,7 @@
 
 AI Foundation 是一个 Agent 编排平台，按项目空间管理 Chat/Embedding 模型、CLI、Skill、知识库等能力，对外提供会话、消息、Agent 编排、RAG 检索等能力，并配套管理后台与 SDK。
 
-当前进度：**阶段 0（工程骨架与基础设施）**、**阶段 1（管理后台基础与项目配置）**、**阶段 2（会话、消息与最小 Chat 闭环）**、**阶段 3（Run、事件流与 Agent 生命周期）** 均已完成。
+当前进度：**阶段 0（工程骨架与基础设施）**、**阶段 1（管理后台基础与项目配置）**、**阶段 2（会话、消息与最小 Chat 闭环）**、**阶段 3（Run、事件流与 Agent 生命周期）**、**阶段 4（CLI 能力管理与项目挂载）** 均已完成。
 
 ## 技术栈与版本
 
@@ -19,7 +19,7 @@ AI Foundation 是一个 Agent 编排平台，按项目空间管理 Chat/Embeddin
 | 数据库 | MySQL 9.x（utf8mb4） |
 | 缓存 | Redis 8.x（StringRedisTemplate） |
 | 对象映射 | Lombok + MapStruct 1.6.3 |
-| 前端 | Vue 3.5 + Element Plus 2.9 + Vite 6 + TypeScript + Pinia + Vue Router 4 + Axios |
+| 前端 | Vue 3.5 + Element Plus 2.9 + Vite 6 + TypeScript + Pinia + Vue Router 4 + Axios + Marked + DOMPurify |
 
 > 版本管理说明：`spring-ai-alibaba-bom` 托管 Alibaba 自身制品，`spring-ai-bom` 托管 Spring AI 核心制品（两者均 import，不单独维护版本）。Agent 编排统一走 Alibaba graph-core，模型接入走 OpenAI 兼容 starter 以支持多供应商。
 
@@ -55,7 +55,7 @@ ai-foundation-parent (pom)
 - **Project 固定系统提示词**：`agent_project.system_prompt` 支持项目维度固定提示词，`prompt_variables` 定义项目所需上下文变量；创建会话时校验并固化变量快照，调用模型时由 Spring AI Advisor 注入最终系统提示词。
 - **模型配置管理**：`agent_model_config` 表；分页/详情/新增/修改/删除；按项目筛选；模型类型 CHAT/EMBEDDING。
 - **AgentModelResolver** 雏形：按项目读取启用模型，未配置时回退系统默认（`agent.ai.models`）。
-- **管理后台前端**：Vue3 + Element Plus；登录页（token 存 localStorage）；请求拦截器自动携带 `x-admin-token`；可折叠侧边栏布局；项目配置页（列表/搜索/分页/增删改弹窗/状态标签）；模型配置页（按项目筛选/增删改）。
+- **管理后台前端**：Vue3 + Element Plus；登录页（token 存 localStorage）；请求拦截器自动携带 `x-admin-token`；可折叠侧边栏布局；项目配置页、模型配置页、会话管理页、Playground 调试台，全新 Teal 主题设计系统。
 
 
 ### 阶段 2
@@ -102,6 +102,13 @@ ai-foundation-parent (pom)
 | POST | `/admin/model` | 新增模型配置 | 是 |
 | PUT | `/admin/model` | 修改模型配置 | 是 |
 | DELETE | `/admin/model/{id}` | 删除模型配置 | 是 |
+| GET | `/admin/cli/{id}` | CLI 详情 | 是 |
+| POST | `/admin/cli/page` | CLI 分页查询 | 是 |
+| POST | `/admin/cli` | 新增 CLI | 是 |
+| PUT | `/admin/cli` | 修改 CLI | 是 |
+| DELETE | `/admin/cli/{id}` | 删除 CLI（软删+级联解绑） | 是 |
+| GET | `/admin/project/{id}/bindOptions` | 查询可挂载能力选项 | 是 |
+| POST | `/admin/project/bindCapabilities` | 提交项目能力挂载 | 是 |
 | GET | `/admin/conversation/page` | 会话分页 | 是 |
 | GET | `/admin/conversation/{id}` | 会话详情（含消息） | 是 |
 | DELETE | `/admin/conversation/{id}` | 删除会话（级联软删消息） | 是 |
@@ -117,7 +124,7 @@ ai-foundation-parent (pom)
 ## 数据库
 
 - 库名：`ai_foundation`，用户：`ai_app` / `AiApp@2026`
-- 初始化 DDL：`docs/full-schema-ddl.sql`（全量），已建 `agent_project`、`agent_model_config`、`agent_conversation_info`、`agent_message_info`。
+- 初始化 DDL：`docs/full-schema-ddl.sql`（全量），增量：`docs/migration-phase3-run.sql`、`docs/migration-phase4-cli.sql`，已建 `agent_project`、`agent_model_config`、`agent_conversation_info`、`agent_message_info`、`agent_cli_command`、`agent_cli_param`、`agent_tool_definition`、`agent_page_definition`、`agent_page_param`、`agent_project_cli_mapping`、`agent_cli_recall_tag`。
 - Project 提示词变量设计：`docs/project-prompt-variables-design.md`。变量在创建会话时传入并写入 `agent_conversation_info.context_variables`，后续对话通过 `conversationCode` 复用会话变量。
 - 约定：统一 `id`、`is_delete`、`create_time`、`update_time`；业务表含 `state`、`create_user`、`modify_user`；逻辑删除；无物理外键。
 
@@ -178,6 +185,13 @@ npm run build        # 类型检查 + 生产构建
 - Redis：localhost:6379
 - 模型服务：Ollama `http://localhost:11434`（OpenAI 兼容，当前使用 `deepseek-r1:1.5b`）
 
+### 阶段 4：CLI 能力管理与项目挂载
+- **CLI 命令管理**：`agent_cli_command` + `agent_cli_param` + `agent_tool_definition` + `agent_page_definition` + `agent_cli_recall_tag` 表；分页/详情/新增/修改/删除接口；支持 API 型和 PAGE 型两种 CLI。
+- **项目挂载能力**：`agent_project_cli_mapping` 表；项目维度挂载/解绑 CLI；全量覆盖策略；挂载后自动失效能力目录缓存。
+- **能力目录缓存**：`CapabilityCatalogCache` Redis 缓存，TTL 30 分钟，CLI 变更/挂载变更自动失效。
+- **管理后台前端**：CLI 管理列表页（搜索/筛选/分页/新增/编辑/删除）；新增/编辑弹窗（4 Tab：基本信息/参数配置/实现定义/召回标签）；项目列表增加"挂载能力"按钮；`BindCapabilityDialog` 弹窗组件（搜索/筛选/全选/分页）。
+- **对应文档**：`docs/development/cli-capability-management-dev-doc.md`，DDL：`docs/migration-phase4-cli.sql`。
+
 ## 后续阶段
 
-阶段 4 起将实现：CLI/API/Page 能力配置与执行、Skill、知识库 RAG、Plan/ReAct 编排、SDK、文件附件等（详见 `docs/implementation-roadmap.md`）。
+阶段 5 起将实现：CLI/API/Page 能力配置与执行、Skill、知识库 RAG、Plan/ReAct 编排、SDK、文件附件等（详见 `docs/implementation-roadmap.md`）。

@@ -1,63 +1,397 @@
+:root {
+  /* === Color Palette === */
+  --c-bg: #f6f7f9;
+  --c-bg-soft: #f1f3f5;
+  --c-surface: #ffffff;
+  --c-surface-hover: #f8fafc;
+  --c-surface-active: #f1f5f9;
+  --c-border: #e5e7eb;
+  --c-border-strong: #d1d5db;
+  --c-border-subtle: #f0f1f3;
+
+  --c-text-1: #111827;
+  --c-text-2: #4b5563;
+  --c-text-3: #9ca3af;
+  --c-text-inverse: #ffffff;
+
+  --c-primary: #0d9488;
+  --c-primary-hover: #0f766e;
+  --c-primary-active: #115e59;
+  --c-primary-soft: #ccfbf1;
+  --c-primary-bg: #f0fdfa;
+
+  --c-accent: #0ea5e9;
+  --c-accent-soft: #e0f2fe;
+
+  --c-success: #059669;
+  --c-success-soft: #d1fae5;
+  --c-warning: #d97706;
+  --c-warning-soft: #fef3c7;
+  --c-error: #dc2626;
+  --c-error-soft: #fee2e2;
+
+  /* === Spacing === */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* === Radius === */
+  --r-sm: 6px;
+  --r-md: 8px;
+  --r-lg: 12px;
+
+  /* === Typography === */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Monaco, Consolas, monospace;
+
+  /* === Shadows === */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.08);
+
+  /* === Sidebar === */
+  --sidebar-width: 232px;
+  --sidebar-width-collapsed: 60px;
+  --header-height: 56px;
+
+  /* === Element Plus Overrides === */
+  --el-color-primary: var(--c-primary);
+  --el-color-primary-light-3: #14b8a6;
+  --el-color-primary-light-5: #2dd4bf;
+  --el-color-primary-light-7: #5eead4;
+  --el-color-primary-light-8: #99f6e4;
+  --el-color-primary-light-9: #ccfbf1;
+  --el-color-primary-dark-2: var(--c-primary-hover);
+  --el-color-success: var(--c-success);
+  --el-color-warning: var(--c-warning);
+  --el-color-danger: var(--c-error);
+
+  --el-font-family: var(--font-sans);
+  --el-border-radius-base: var(--r-md);
+  --el-border-color: var(--c-border);
+  --el-border-color-light: var(--c-border-subtle);
+  --el-bg-color: var(--c-surface);
+  --el-bg-color-page: var(--c-bg);
+  --el-text-color-primary: var(--c-text-1);
+  --el-text-color-regular: var(--c-text-2);
+  --el-text-color-secondary: var(--c-text-3);
+  --el-fill-color-light: var(--c-surface-hover);
+}
+
+* {
+  box-sizing: border-box;
+}
+
 html, body, #app {
   margin: 0;
   padding: 0;
   height: 100%;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-family: var(--font-sans);
+  color: var(--c-text-1);
+  background: var(--c-bg);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
+
+/* === Login === */
 .login-container {
   height: 100vh;
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(135deg, #1e3a5f 0%, #2c5f8a 100%);
+  background:
+    radial-gradient(ellipse at top left, rgba(13, 148, 136, 0.12), transparent 50%),
+    radial-gradient(ellipse at bottom right, rgba(14, 165, 233, 0.1), transparent 50%),
+    linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+  position: relative;
+  overflow: hidden;
 }
+
+.login-container::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+}
+
 .login-card {
   width: 380px;
-  padding: 40px 36px;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.2);
+  padding: 36px 32px;
+  background: rgba(255, 255, 255, 0.98);
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  position: relative;
+  z-index: 1;
 }
-.login-title {
+
+.login-brand {
   text-align: center;
-  margin: 0 0 28px;
-  font-size: 22px;
-  color: #1e3a5f;
+  margin-bottom: 24px;
+}
+
+.login-brand-icon {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto 12px;
+  background: linear-gradient(135deg, var(--c-primary), var(--c-accent));
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.login-title {
+  margin: 0;
+  font-size: 20px;
   font-weight: 600;
+  color: var(--c-text-1);
+  letter-spacing: -0.01em;
 }
+
+.login-subtitle {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--c-text-3);
+}
+
+/* === Layout === */
 .app-aside {
-  background: #1e3a5f;
+  background: var(--c-surface);
+  border-right: 1px solid var(--c-border);
+  transition: width 0.2s ease;
 }
+
+.app-aside .el-menu {
+  border-right: none !important;
+}
+
 .app-header {
-  background: #fff;
-  border-bottom: 1px solid #ebeef5;
+  background: var(--c-surface);
+  border-bottom: 1px solid var(--c-border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 0 20px;
+  height: var(--header-height);
 }
+
+.app-header .page-title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--c-text-1);
+  letter-spacing: -0.01em;
+}
+
 .page-container {
   padding: 20px;
-  background: #f0f2f5;
-  min-height: calc(100vh - 60px);
+  background: var(--c-bg);
+  min-height: calc(100vh - var(--header-height));
 }
+
+/* === Sidebar Brand === */
+.sidebar-brand {
+  height: var(--header-height);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  border-bottom: 1px solid var(--c-border);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.sidebar-brand-icon {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  background: linear-gradient(135deg, var(--c-primary), var(--c-accent));
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.sidebar-brand-text {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--c-text-1);
+  letter-spacing: -0.01em;
+}
+
+/* === Filter Bar & Cards === */
 .filter-bar {
-  background: #fff;
+  background: var(--c-surface);
   padding: 16px 20px;
   margin-bottom: 16px;
-  border-radius: 6px;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--c-border);
   display: flex;
   align-items: center;
   gap: 12px;
   flex-wrap: wrap;
 }
+
 .table-card {
-  background: #fff;
-  padding: 16px 20px;
-  border-radius: 6px;
+  background: var(--c-surface);
+  padding: 0;
+  border-radius: var(--r-lg);
+  border: 1px solid var(--c-border);
+  overflow: hidden;
 }
+
+.table-card .el-table {
+  --el-table-border-color: var(--c-border-subtle);
+  --el-table-header-bg-color: var(--c-bg-soft);
+  --el-table-row-hover-bg-color: var(--c-surface-hover);
+  --el-table-header-text-color: var(--c-text-2);
+}
+
+.table-card .el-table th.el-table__cell {
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.table-card .el-table td.el-table__cell {
+  font-size: 13px;
+}
+
 .pagination-bar {
-  margin-top: 16px;
+  padding: 16px 20px;
   display: flex;
   justify-content: flex-end;
+  border-top: 1px solid var(--c-border-subtle);
+}
+
+/* === Action Buttons === */
+.action-btns {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* === Page Header === */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.page-header-left h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--c-text-1);
+  letter-spacing: -0.01em;
+}
+
+.page-header-left p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--c-text-3);
+}
+
+/* === Dialog Polish === */
+.el-dialog {
+  border-radius: var(--r-lg);
+  --el-dialog-header-font-weight: 600;
+  --el-dialog-title-font-size: 15px;
+}
+
+.el-dialog__header {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.el-dialog__body {
+  padding: 20px !important;
+}
+
+.el-dialog__footer {
+  padding: 14px 20px;
+  border-top: 1px solid var(--c-border);
+}
+
+/* === Form Polish === */
+.el-form-item__label {
+  font-weight: 500;
+  color: var(--c-text-2);
+}
+
+/* === Descriptions === */
+.el-descriptions {
+  --el-descriptions-item-label-font-weight: 500;
+  --el-descriptions-text-color-secondary: var(--c-text-3);
+}
+
+/* === Tag === */
+.el-tag {
+  border-radius: var(--r-sm);
+  font-size: 12px;
+  padding: 0 8px;
+  height: 22px;
+  line-height: 20px;
+  border: none;
+}
+
+/* === Button Polish === */
+.el-button {
+  border-radius: var(--r-md);
+  font-weight: 500;
+}
+
+/* === Select / Input === */
+.el-input__wrapper,
+.el-select__wrapper {
+  border-radius: var(--r-md);
+}
+
+/* === Mono text === */
+.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* === Scrollbar === */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}
+
+/* === Responsive === */
+@media (max-width: 768px) {
+  .filter-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
 }

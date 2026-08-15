@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue'
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus'
-import { Plus, Search, Refresh, Delete, Edit } from '@element-plus/icons-vue'
+import { Plus, Search, Refresh, Delete, Edit, Cpu } from '@element-plus/icons-vue'
 import { pageModels, createModel, updateModel, deleteModel } from '@/api/model'
 import { pageProjects } from '@/api/project'
 import type { AgentModelConfigDTO, AgentProjectDTO } from '@/types/api'
@@ -24,7 +24,12 @@ const dialogVisible = ref(false)
 const dialogTitle = ref('')
 const submitLoading = ref(false)
 const formRef = ref<FormInstance>()
-const form = reactive<AgentModelConfigDTO>({ projectId: undefined as any, modelName: '', modelType: 'CHAT', state: 1 })
+const form = reactive<AgentModelConfigDTO>({
+  projectId: undefined as any,
+  modelName: '',
+  modelType: 'CHAT',
+  state: 1
+})
 
 const rules: FormRules = {
   projectId: [{ required: true, message: '请选择项目', trigger: 'change' }],
@@ -63,7 +68,13 @@ function handleReset() {
 
 function openCreate() {
   dialogTitle.value = '新增模型配置'
-  Object.assign(form, { id: undefined, projectId: query.projectId, modelName: '', modelType: 'CHAT', state: 1 })
+  Object.assign(form, {
+    id: undefined,
+    projectId: query.projectId,
+    modelName: '',
+    modelType: 'CHAT',
+    state: 1
+  })
   dialogVisible.value = true
 }
 
@@ -133,6 +144,14 @@ onMounted(async () => {
 
 <template>
   <div>
+    <div class="page-header">
+      <div class="page-header-left">
+        <h2>模型配置</h2>
+        <p>管理接入的 Chat / Embedding 模型，按项目分配</p>
+      </div>
+      <el-button type="primary" :icon="Plus" @click="openCreate">新增模型</el-button>
+    </div>
+
     <div class="filter-bar">
       <el-select v-model="query.projectId" placeholder="所属项目" clearable filterable style="width: 200px;" @change="handleSearch">
         <el-option v-for="p in projects" :key="p.id" :label="p.projectName" :value="p.id" />
@@ -148,30 +167,45 @@ onMounted(async () => {
       </el-select>
       <el-button type="primary" :icon="Search" @click="handleSearch">查询</el-button>
       <el-button :icon="Refresh" @click="handleReset">重置</el-button>
-      <el-button type="primary" :icon="Plus" @click="openCreate" style="margin-left: auto;">新增模型</el-button>
     </div>
+
     <div class="table-card">
-      <el-table v-loading="loading" :data="tableData" border stripe>
-        <el-table-column label="ID" prop="id" width="70" />
-        <el-table-column label="所属项目" width="160">
-          <template #default="{ row }">{{ projectName(row.projectId) }}</template>
-        </el-table-column>
-        <el-table-column label="模型名称" prop="modelName" min-width="160" />
-        <el-table-column label="模型类型" width="120">
+      <el-table v-loading="loading" :data="tableData" stripe style="width: 100%">
+        <el-table-column label="ID" prop="id" width="70" align="center" />
+        <el-table-column label="模型" min-width="200">
           <template #default="{ row }">
-            <el-tag :type="typeTag(row.modelType)">{{ row.modelType }}</el-tag>
+            <div class="model-cell">
+              <div class="model-icon" :class="{ 'is-embedding': row.modelType === 'EMBEDDING' }">
+                <el-icon><Cpu /></el-icon>
+              </div>
+              <div>
+                <div class="model-name">{{ row.modelName }}</div>
+                <div class="model-project">
+                  <el-tag :type="typeTag(row.modelType)" size="small" effect="plain">
+                    {{ row.modelType }}
+                  </el-tag>
+                  <span class="project-name-text">{{ projectName(row.projectId) }}</span>
+                </div>
+              </div>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="状态" width="90">
+        <el-table-column label="状态" width="90" align="center">
           <template #default="{ row }">
-            <el-tag :type="stateType(row.state)">{{ stateText(row.state) }}</el-tag>
+            <el-tag :type="stateType(row.state)" effect="light">{{ stateText(row.state) }}</el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="创建人" prop="createUser" width="100" />
-        <el-table-column label="更新时间" width="170">
-          <template #default="{ row }">{{ formatTime(row.updateTime) }}</template>
+        <el-table-column label="创建人" prop="createUser" width="100" align="center">
+          <template #default="{ row }">
+            <span class="text-muted">{{ row.createUser || '—' }}</span>
+          </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="更新时间" width="170" align="center">
+          <template #default="{ row }">
+            <span class="time-text">{{ formatTime(row.updateTime) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="160" fixed="right" align="center">
           <template #default="{ row }">
             <div class="action-btns">
               <el-button type="primary" link :icon="Edit" @click="openEdit(row)">编辑</el-button>
@@ -193,7 +227,7 @@ onMounted(async () => {
       </div>
     </div>
 
-    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="520px">
+    <el-dialog v-model="dialogVisible" :title="dialogTitle" width="520px" destroy-on-close>
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="所属项目" prop="projectId">
           <el-select v-model="form.projectId" placeholder="请选择项目" filterable style="width: 100%;" :disabled="!!form.id">
@@ -225,10 +259,59 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.action-btns {
+.model-cell {
   display: flex;
   align-items: center;
-  gap: 4px;
-  white-space: nowrap;
+  gap: 10px;
+}
+
+.model-icon {
+  width: 36px;
+  height: 36px;
+  background: var(--c-primary-soft);
+  color: var(--c-primary);
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.model-icon.is-embedding {
+  background: var(--c-warning-soft);
+  color: var(--c-warning);
+}
+
+.model-icon .el-icon {
+  font-size: 18px;
+}
+
+.model-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-1);
+}
+
+.model-project {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.project-name-text {
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.time-text {
+  color: var(--c-text-3);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.text-muted {
+  color: var(--c-text-3);
+  font-size: 13px;
 }
 </style>

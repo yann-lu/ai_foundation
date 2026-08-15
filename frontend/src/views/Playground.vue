@@ -2,42 +2,31 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import {
-  ChatDotRound,
-  Clock,
-  Connection,
-  Cpu,
-  DocumentCopy,
-  Loading,
-  Plus,
-  Promotion,
-  Refresh,
-  VideoPause,
-  Warning
+  Plus, Refresh, ChatLineRound, MagicStick, Promotion, VideoPause,
+  Cpu, Document, Tools, CircleCheck, Close, CircleClose,
+  Warning, ArrowDown, User, List, VideoPlay, Avatar
 } from '@element-plus/icons-vue'
 import { pageProjects } from '@/api/project'
-import { createConversation, createRun, streamRunEvents, cancelRun, getMessages } from '@/api/chat'
-import { pageConversations } from '@/api/conversation'
+import { pageConversations } from "@/api/conversation"
+import { createConversation, createRun, streamRunEvents, cancelRun, getMessages } from "@/api/chat"
+import { parseThink } from '@/utils/think-parser'
 import { renderMarkdown } from '@/utils/markdown'
-import type { AgentProjectDTO, ConversationDTO, CreateRunRequest, MessageDTO, RunStreamEnvelope } from '@/types/api'
+import type { AgentProjectDTO, ConversationDTO, MessageDTO, RunStreamEnvelope } from '@/types/api'
 
+// ===== Types =====
 interface ChatMessage {
-  role: string
+  id: string
+  role: 'user' | 'assistant'
   content: string
   reasoning?: string
-  streaming?: boolean
-  createdAt?: number
+  status: 'complete' | 'running' | 'error' | 'cancelled'
 }
 
 interface RunEventLog {
   eventType: RunStreamEnvelope['eventType']
   taskState: string | null
-  dataPreview: string
+  data: unknown
   timestamp: number
-}
-
-interface ParsedAssistantContent {
-  answer: string
-  reasoning: string
 }
 
 interface PromptVariableDefinition {
@@ -49,612 +38,1752 @@ interface PromptVariableDefinition {
   defaultValue?: unknown
 }
 
+interface TimelineStep {
+  id: string
+  label: string
+  icon: any
+  color: string
+  startTime: number
+  endTime: number
+  content: string | null
+  count?: number
+}
+
+// ===== State =====
 const projects = ref<AgentProjectDTO[]>([])
-const selectedProjectCode = ref('')
-const conversationCode = ref('')
+const projectCode = ref('')
+const conversations = ref<ConversationDTO[]>([])
+const activeConvCode = ref('')
+const activeConvId = ref<number | null>(null)
+const loadingConv = ref(false)
+const convListRef = ref<HTMLElement>()
+
 const systemPrompt = ref('')
 const userInput = ref('')
-const sending = ref(false)
+const isRunning = ref(false)
 const messages = ref<ChatMessage[]>([])
 const chatBodyRef = ref<HTMLElement>()
-const userInputRef = ref()
 
-const conversations = ref<ConversationDTO[]>([])
-const activeConversationId = ref<number>()
-const convLoading = ref(false)
-const convLoadingMore = ref(false)
-const convHasMore = ref(true)
-const convPage = ref(1)
-const convPageSize = 20
-const convListRef = ref<HTMLElement>()
-const creating = ref(false)
-const variableDialogVisible = ref(false)
+const runEvents = ref<RunEventLog[]>([])
+const runCode = ref('')
+const runStartedAt = ref<number | null>(null)
+const runFinishedAt = ref<number | null>(null)
+const inspectorTab = ref<'messages' | 'trace'>('messages')
+
+const variableDialogOpen = ref(false)
 const pendingVariables = ref<PromptVariableDefinition[]>([])
 const contextVariableForm = ref<Record<string, unknown>>({})
 
-const currentRunCode = ref('')
-const runStartedAt = ref<number>()
-const runFinishedAt = ref<number>()
-const runEvents = ref<RunEventLog[]>([])
-let activeEventSource: EventSource | null = null
+let eventSource: EventSource | null = null
+let assistantMsgId = ''
 
-const selectedProject = computed(() => projects.value.find(p => p.projectCode === selectedProjectCode.value))
-const activeConversation = computed(() => conversations.value.find(c => c.id === activeConversationId.value))
-const canSend = computed(() => !!conversationCode.value && !!userInput.value.trim() && !sending.value)
-const hasReasoning = computed(() => messages.value.some(msg => !!msg.reasoning?.trim()))
-const latestReasoning = computed(() => [...messages.value].reverse().find(msg => msg.reasoning?.trim())?.reasoning || '')
-const lastAssistant = computed(() => [...messages.value].reverse().find(msg => msg.role === 'assistant'))
-const tokenCount = computed(() => lastAssistant.value?.content.length || 0)
+// ===== Computed =====
+const selectedProject = computed(() =>
+  projects.value.find(p => p.projectCode === projectCode.value)
+)
+
+const activeConversation = computed(() =>
+  conversations.value.find(c => c.conversationCode === activeConvCode.value)
+)
+
+const tokenCount = computed(() => {
+  const last = [...messages.value].reverse().find(m => m.role === 'assistant')
+  return last?.content.length || 0
+})
+
+const reasoningCount = computed(() => {
+  return runEvents.value.filter(e => e.eventType === 'chat_reasoning').length
+})
+
 const runDuration = computed(() => {
   if (!runStartedAt.value) return '--'
   const end = runFinishedAt.value || Date.now()
-  return `${Math.max(0, end - runStartedAt.value)} ms`
+  const ms = Math.max(0, end - runStartedAt.value)
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
 })
 
+const requestMessages = computed(() => {
+  const ev = [...runEvents.value].reverse()
+    .find(e => e.eventType === 'request_messages')
+  if (!ev || !Array.isArray(ev.data)) return []
+  return (ev.data as any[]).map(m => ({
+    role: m.role || 'unknown',
+    content: typeof m.content === 'string' ? m.content : ''
+  }))
+})
+
+const rawResponseText = computed(() => {
+  const complete = [...runEvents.value].reverse().find(e => e.eventType === 'run_complete')
+  if (typeof complete?.data === 'string' && complete.data) return complete.data
+  return runEvents.value
+    .filter(e => e.eventType === 'chat_token')
+    .map(e => String(e.data ?? ''))
+    .join('')
+})
+
+const parsedResponse = computed(() => parseThink(rawResponseText.value))
+
+const responseReasoning = computed(() => {
+  const reasoning = runEvents.value
+    .filter(e => e.eventType === 'chat_reasoning')
+    .map(e => String(e.data ?? ''))
+    .join('')
+  return reasoning || parsedResponse.value.reasoning
+})
+
+const responseText = computed(() => parsedResponse.value.answer)
+
+const timelineSteps = computed(() => buildTimeline(runEvents.value))
+
+// ===== Functions =====
 function parsePromptVariables(project?: AgentProjectDTO): PromptVariableDefinition[] {
   if (!project?.promptVariables?.trim()) return []
   try {
     const parsed = JSON.parse(project.promptVariables)
-    return Array.isArray(parsed) ? parsed.filter(item => item?.name) : []
+    return Array.isArray(parsed) ? parsed.filter((item: any) => item?.name) : []
   } catch {
     return []
   }
 }
 
-function openVariableDialog(definitions: PromptVariableDefinition[]) {
-  pendingVariables.value = definitions
-  const values: Record<string, unknown> = {}
-  definitions.forEach(item => {
-    if (item.defaultValue !== undefined && item.defaultValue !== null) {
-      values[item.name] = item.defaultValue
-    } else {
-      values[item.name] = ''
+async function loadProjects() {
+  try {
+    const res = await pageProjects({ current: 1, size: 100, state: 1 })
+    projects.value = res.data.records
+    if (!projectCode.value && res.data.records.length > 0) {
+      projectCode.value = res.data.records[0].projectCode
     }
-  })
-  contextVariableForm.value = values
-  variableDialogVisible.value = true
+  } catch {
+    // ignore
+  }
 }
 
-function normalizeContextVariables() {
+async function loadConversations() {
+  if (!projectCode.value) {
+    conversations.value = []
+    return
+  }
+  loadingConv.value = true
+  try {
+    const res = await pageConversations({
+      productCode: projectCode.value,
+      state: 0,
+      current: 1,
+      size: 50,
+    } as any)
+    conversations.value = res.data.records
+  } catch {
+    conversations.value = []
+  } finally {
+    loadingConv.value = false
+  }
+}
+
+async function handleSelectConversation(conv: ConversationDTO) {
+  if (isRunning.value) return
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+  activeConvCode.value = conv.conversationCode
+  activeConvId.value = conv.id
+  resetRunState()
+  await loadConversationMessages(conv.conversationCode)
+}
+
+async function loadConversationMessages(code: string) {
+  try {
+    const res = await getMessages(code)
+    const history: ChatMessage[] = (res.data || []).map((m: MessageDTO) => {
+      if (m.role === 'assistant') {
+        const { reasoning, answer } = parseThink(m.content)
+        return {
+          id: String(m.id),
+          role: 'assistant',
+          content: answer,
+          reasoning: reasoning || undefined,
+          status: 'complete',
+        }
+      }
+      return {
+        id: String(m.id),
+        role: 'user',
+        content: m.content,
+        status: 'complete',
+      }
+    })
+    messages.value = history
+    scrollToBottom()
+  } catch {
+    messages.value = []
+  }
+}
+
+function resetRunState() {
+  runEvents.value = []
+  runCode.value = ''
+  runStartedAt.value = null
+  runFinishedAt.value = null
+}
+
+async function handleNewConversation() {
+  const definitions = parsePromptVariables(selectedProject.value)
+  if (definitions.length > 0) {
+    const values: Record<string, unknown> = {}
+    definitions.forEach(item => {
+      values[item.name] = item.defaultValue ?? ''
+    })
+    pendingVariables.value = definitions
+    contextVariableForm.value = values
+    variableDialogOpen.value = true
+    return
+  }
+  await createWithVariables({})
+}
+
+async function createWithVariables(contextVariables: Record<string, unknown>) {
+  if (!projectCode.value) return
+  try {
+    const res = await createConversation({
+      productCode: projectCode.value,
+      contextVariables,
+      title: `Playground ${new Date().toLocaleString('zh-CN', {
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      })}`,
+    })
+    activeConvCode.value = res.data.conversationCode
+    activeConvId.value = res.data.id
+    messages.value = []
+    resetRunState()
+    loadConversations()
+    scrollToBottom()
+  } catch (e) {
+    // request layer reports error
+  }
+}
+
+async function handleConfirmVariables() {
   const values: Record<string, unknown> = {}
   for (const item of pendingVariables.value) {
     const raw = contextVariableForm.value[item.name]
-    if (item.required && (raw === undefined || raw === null || String(raw).trim() === '')) {
-      ElMessage.warning(`请填写${item.label || item.name}`)
-      return null
-    }
-    if (raw === undefined || raw === null || String(raw).trim() === '') {
-      continue
-    }
+    if (item.required && (raw == null || String(raw).trim() === '')) return
+    if (raw == null || String(raw).trim() === '') continue
     if (item.type === 'number') {
-      const num = Number(raw)
-      if (Number.isNaN(num)) {
-        ElMessage.warning(`${item.label || item.name} 必须是数字`)
-        return null
-      }
-      values[item.name] = num
+      values[item.name] = Number(raw)
     } else if (item.type === 'boolean') {
       values[item.name] = raw === true || raw === 'true'
     } else {
       values[item.name] = String(raw).trim()
     }
   }
-  return values
-}
-const activeModelName = computed(() => activeConversation.value?.modelName || selectedProject.value?.projectCode || '--')
-
-async function loadProjects() {
-  const res = await pageProjects({ current: 1, size: 100, state: 1 })
-  projects.value = res.data.records
-  if (!selectedProjectCode.value && projects.value.length > 0) {
-    selectedProjectCode.value = projects.value[0].projectCode
-  }
+  variableDialogOpen.value = false
+  await createWithVariables(values)
 }
 
-async function loadConversations(reset = false) {
-  if (!selectedProjectCode.value) {
-    conversations.value = []
-    return
-  }
-  if (reset) {
-    convPage.value = 1
-    convHasMore.value = true
-    conversations.value = []
-  } else if (convLoading.value || convLoadingMore.value || !convHasMore.value) {
-    return
-  }
-  if (reset) convLoading.value = true
-  else convLoadingMore.value = true
-  try {
-    const res = await pageConversations({
-      productCode: selectedProjectCode.value,
-      state: 0,
-      current: convPage.value,
-      size: convPageSize
-    })
-    const list = res.data.records
-    conversations.value = reset ? list : [...conversations.value, ...list]
-    convHasMore.value = conversations.value.length < res.data.total
-    if (list.length) convPage.value++
-  } finally {
-    convLoading.value = false
-    convLoadingMore.value = false
-  }
-}
-
-function handleConvScroll() {
-  const el = convListRef.value
-  if (!el) return
-  if (el.scrollTop + el.clientHeight >= el.scrollHeight - 24) {
-    loadConversations()
-  }
-}
-
-async function selectConversation(conv: ConversationDTO) {
-  if (sending.value) {
-    ElMessage.warning('当前 Run 仍在执行')
-    return
-  }
-  activeConversationId.value = conv.id
-  conversationCode.value = conv.conversationCode
-  messages.value = []
-  resetRunInspector()
-  const res = await getMessages(conv.conversationCode)
-  messages.value = res.data.map((m: MessageDTO) => {
-    const parsed = m.role === 'assistant' ? parseAssistantContent(m.content) : { answer: m.content, reasoning: '' }
-    return {
-      role: m.role,
-      content: parsed.answer,
-      reasoning: parsed.reasoning,
-      createdAt: m.createTime ? new Date(m.createTime).getTime() : undefined
-    }
-  })
-  await scrollToTop()
-}
-
-async function handleNewConversation() {
-  if (!selectedProjectCode.value) {
-    ElMessage.warning('请先选择项目')
-    return
-  }
-  if (sending.value) {
-    ElMessage.warning('当前 Run 仍在执行')
-    return
-  }
-  const definitions = parsePromptVariables(selectedProject.value)
-  if (definitions.length) {
-    openVariableDialog(definitions)
-    return
-  }
-  await createNewConversation({})
-}
-
-async function confirmCreateConversation() {
-  const variables = normalizeContextVariables()
-  if (variables == null) return
-  variableDialogVisible.value = false
-  await createNewConversation(variables)
-}
-
-async function createNewConversation(contextVariables: Record<string, unknown>) {
-  creating.value = true
-  try {
-    messages.value = []
-    conversationCode.value = ''
-    resetRunInspector()
-    const res = await createConversation({
-      productCode: selectedProjectCode.value,
-      contextVariables,
-      title: `Playground ${new Date().toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}`
-    })
-    conversationCode.value = res.data.conversationCode
-    activeConversationId.value = res.data.id
-    await loadConversations(true)
-    await nextTick()
-    userInputRef.value?.focus?.()
-    ElMessage.success('会话已创建')
-  } finally {
-    creating.value = false
-  }
-}
-
-async function handleSend() {
-  if (!canSend.value) return
+async function handlePromotion() {
   const text = userInput.value.trim()
+  if (!text || !activeConvCode.value || isRunning.value) return
+
   userInput.value = ''
-  messages.value.push({ role: 'user', content: text, createdAt: Date.now() })
-  const assistantMsg: ChatMessage = { role: 'assistant', content: '', reasoning: '', streaming: true, createdAt: Date.now() }
-  messages.value.push(assistantMsg)
-  sending.value = true
-  resetRunInspector()
-  await scrollToBottom()
 
-  const req: CreateRunRequest = {
-    conversationCode: conversationCode.value,
-    userMessage: text,
-    systemPrompt: systemPrompt.value.trim() || undefined
+  const userMsg: ChatMessage = {
+    id: `u_${Date.now()}`,
+    role: 'user',
+    content: text,
+    status: 'complete',
   }
+  assistantMsgId = `a_${Date.now()}`
+  const assistantMsg: ChatMessage = {
+    id: assistantMsgId,
+    role: 'assistant',
+    content: '',
+    reasoning: '',
+    status: 'running',
+  }
+  messages.value.push(userMsg, assistantMsg)
+  scrollToBottom()
+
+  isRunning.value = true
+  resetRunState()
+  runStartedAt.value = Date.now()
+
+  let rawBuffer = ''
+  let reasoningBuffer = ''
 
   try {
-    const createRes = await createRun(req)
-    const runCode = createRes.data.runCode
-    currentRunCode.value = runCode
-    runStartedAt.value = Date.now()
-    await consumeRunEvents(runCode, assistantMsg)
-    await loadConversations(true)
-  } catch (e: any) {
-    assistantMsg.streaming = false
-    assistantMsg.content = `请求失败: ${e.message || '未知错误'}`
-    addRunEvent('run_error', 'FAILED', assistantMsg.content, Date.now())
-    ElMessage.error('请求失败')
-  } finally {
-    sending.value = false
-    currentRunCode.value = ''
-    closeEventSource()
-    runFinishedAt.value = runFinishedAt.value || Date.now()
+    const createRes = await createRun({
+      conversationCode: activeConvCode.value,
+      userMessage: text,
+      systemPrompt: systemPrompt.value.trim() || undefined,
+    })
+    runCode.value = createRes.data.runCode
+
+    await new Promise<void>((resolve, reject) => {
+      const source = streamRunEvents(createRes.data.runCode)
+      eventSource = source
+
+      source.onmessage = (event) => {
+        let env: RunStreamEnvelope
+        try {
+          env = JSON.parse(event.data) as RunStreamEnvelope
+        } catch {
+          return
+        }
+
+        runEvents.value.push({
+          eventType: env.eventType,
+          taskState: env.taskState,
+          data: env.data,
+          timestamp: env.timestamp || Date.now(),
+        })
+
+        if (env.eventType === 'chat_token') {
+          rawBuffer += String(env.data ?? '')
+          const parsed = parseThink(rawBuffer)
+          updateAssistantMessage(assistantMsgId, {
+            content: parsed.answer,
+            reasoning: parsed.reasoning || undefined,
+          })
+          scrollToBottom()
+        } else if (env.eventType === 'chat_reasoning') {
+          reasoningBuffer += String(env.data ?? '')
+        } else if (env.eventType === 'run_complete') {
+          runFinishedAt.value = Date.now()
+          const finalRaw = typeof env.data === 'string' ? env.data : rawBuffer
+          const finalParsed = parseThink(finalRaw)
+          updateAssistantMessage(assistantMsgId, {
+            content: finalParsed.answer,
+            reasoning: finalParsed.reasoning || reasoningBuffer || undefined,
+            status: 'complete',
+          })
+          source.close()
+          isRunning.value = false
+          eventSource = null
+          scrollToBottom()
+          resolve()
+        } else if (env.eventType === 'run_error') {
+          runFinishedAt.value = Date.now()
+          updateAssistantMessage(assistantMsgId, {
+            content: `错误: ${String(env.data ?? '执行失败')}`,
+            status: 'error',
+          })
+          source.close()
+          isRunning.value = false
+          eventSource = null
+          ElMessage.error(String(env.data ?? '执行失败'))
+          reject(new Error(String(env.data ?? '执行失败')))
+        } else if (env.eventType === 'run_cancelled') {
+          runFinishedAt.value = Date.now()
+          const finalRaw = typeof env.data === 'string' ? env.data : rawBuffer
+          const finalParsed = parseThink(finalRaw)
+          updateAssistantMessage(assistantMsgId, {
+            content: finalParsed.answer,
+            reasoning: finalParsed.reasoning || reasoningBuffer || undefined,
+            status: 'cancelled',
+          })
+          source.close()
+          isRunning.value = false
+          eventSource = null
+          resolve()
+        }
+      }
+
+      source.onerror = () => {
+        runFinishedAt.value = Date.now()
+        updateAssistantMessage(assistantMsgId, {
+          content: 'SSE 连接中断',
+          status: 'error',
+        })
+        source.close()
+        isRunning.value = false
+        eventSource = null
+        reject(new Error('SSE 连接中断'))
+      }
+    })
+  } catch (e) {
+    isRunning.value = false
+    eventSource = null
+    const errMsg = e instanceof Error ? e.message : '未知错误'
+    updateAssistantMessage(assistantMsgId, {
+      content: `请求失败: ${errMsg}`,
+      status: 'error',
+    })
+  }
+
+  loadConversations()
+}
+
+function updateAssistantMessage(id: string, updates: Partial<ChatMessage>) {
+  const idx = messages.value.findIndex(m => m.id === id)
+  if (idx !== -1) {
+    messages.value[idx] = { ...messages.value[idx], ...updates }
   }
 }
 
-function consumeRunEvents(runCode: string, assistantMsg: ChatMessage) {
-  return new Promise<void>((resolve, reject) => {
-    const source = streamRunEvents(runCode)
-    activeEventSource = source
-
-    source.onmessage = async (event) => {
-      let envelope: RunStreamEnvelope
-      try {
-        envelope = JSON.parse(event.data) as RunStreamEnvelope
-      } catch {
-        return
-      }
-      addRunEvent(envelope.eventType, envelope.taskState, envelope.data, envelope.timestamp)
-
-      if (envelope.eventType === 'chat_token') {
-        appendAssistantToken(assistantMsg, String(envelope.data || ''))
-        await scrollToBottom()
-      } else if (envelope.eventType === 'run_complete') {
-        const reply = typeof envelope.data === 'string' ? envelope.data : assistantMsg.content
-        const parsed = parseAssistantContent(reply)
-        assistantMsg.content = parsed.answer
-        assistantMsg.reasoning = parsed.reasoning
-        assistantMsg.streaming = false
-        runFinishedAt.value = Date.now()
-        resolve()
-        closeEventSource()
-        await scrollToBottom()
-      } else if (envelope.eventType === 'run_error') {
-        assistantMsg.content = String(envelope.data || '执行失败')
-        assistantMsg.streaming = false
-        runFinishedAt.value = Date.now()
-        closeEventSource()
-        reject(new Error(assistantMsg.content))
-      } else if (envelope.eventType === 'run_cancelled') {
-        assistantMsg.streaming = false
-        runFinishedAt.value = Date.now()
-        resolve()
-        closeEventSource()
-      }
-    }
-
-    source.onerror = () => {
-      closeEventSource()
-      reject(new Error('SSE 连接中断'))
-    }
-  })
-}
-
-function appendAssistantToken(message: ChatMessage, token: string) {
-  message.content += token
-}
-
-function parseAssistantContent(content: string): ParsedAssistantContent {
-  if (!content) return { answer: '', reasoning: '' }
-  let reasoning = ''
-  let answer = content
-  answer = answer.replace(/<think>([\s\S]*?)<\/think>/gi, (_match, block) => {
-    reasoning += `${block.trim()}\n\n`
-    return ''
-  })
-  answer = answer.replace(/<think>([\s\S]*)$/i, (_match, block) => {
-    reasoning += block.trim()
-    return ''
-  })
-  return { answer: answer.trimStart(), reasoning: reasoning.trim() }
-}
-
-async function handleStop() {
-  if (!currentRunCode.value) return
+async function handleCancel() {
+  if (!runCode.value) return
   try {
-    await cancelRun(currentRunCode.value)
+    await cancelRun(runCode.value)
   } catch {
-    /* request layer already reports cancellation errors */
+    // ignore
   }
 }
 
-function resetRunInspector() {
-  runEvents.value = []
-  currentRunCode.value = ''
-  runStartedAt.value = undefined
-  runFinishedAt.value = undefined
-  closeEventSource()
-}
-
-function closeEventSource() {
-  if (activeEventSource) {
-    activeEventSource.close()
-    activeEventSource = null
-  }
-}
-
-function addRunEvent(eventType: RunStreamEnvelope['eventType'], taskState: string | null, data: unknown, timestamp?: number) {
-  runEvents.value.push({
-    eventType,
-    taskState,
-    dataPreview: previewEventData(data),
-    timestamp: timestamp || Date.now()
+function scrollToBottom() {
+  nextTick(() => {
+    if (chatBodyRef.value) {
+      chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight
+    }
   })
 }
 
-function previewEventData(data: unknown) {
-  if (data == null || data === '') return ''
-  const text = typeof data === 'string' ? data : JSON.stringify(data)
-  return text.length > 120 ? `${text.slice(0, 120)}...` : text
+function formatTime(t: number): string {
+  return new Date(t).toLocaleTimeString('zh-CN', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit',
+  })
 }
 
-async function copyConversationCode() {
-  if (!conversationCode.value) return
-  await navigator.clipboard.writeText(conversationCode.value)
-  ElMessage.success('会话编码已复制')
+function durationLabel(start: number, end: number): string {
+  const ms = Math.max(0, end - start)
+  if (ms < 1000) return `${ms}ms`
+  return `${(ms / 1000).toFixed(1)}s`
 }
 
-async function scrollToBottom() {
-  await nextTick()
-  if (chatBodyRef.value) {
-    chatBodyRef.value.scrollTop = chatBodyRef.value.scrollHeight
+function buildTimeline(events: RunEventLog[]): TimelineStep[] {
+  const steps: TimelineStep[] = []
+
+  const startEvent = events.find(e => e.eventType === 'run_start')
+  if (startEvent) {
+    steps.push({
+      id: 'run_start',
+      label: 'Run 开始',
+      icon: VideoPlay,
+      color: 'var(--c-primary)',
+      startTime: startEvent.timestamp,
+      endTime: startEvent.timestamp,
+      content: null,
+    })
   }
-}
 
-async function scrollToTop() {
-  await nextTick()
-  if (chatBodyRef.value) {
-    chatBodyRef.value.scrollTop = 0
+  const requestMsgEvent = events.find(e => e.eventType === 'request_messages')
+  if (requestMsgEvent) {
+    const count = Array.isArray(requestMsgEvent.data) ? requestMsgEvent.data.length : 0
+    steps.push({
+      id: 'request_messages',
+      label: `请求消息 (${count})`,
+      icon: List,
+      color: 'var(--c-accent)',
+      startTime: requestMsgEvent.timestamp,
+      endTime: requestMsgEvent.timestamp,
+      content: null,
+      count,
+    })
   }
-}
 
-function handleKeydown(e: KeyboardEvent) {
-  if (e.key === 'Enter' && !e.shiftKey) {
-    e.preventDefault()
-    handleSend()
+  const chatStart = events.find(e => e.eventType === 'chat_start')
+  if (chatStart) {
+    steps.push({
+      id: 'chat_start',
+      label: 'Chat 开始',
+      icon: Avatar,
+      color: 'var(--c-accent)',
+      startTime: chatStart.timestamp,
+      endTime: chatStart.timestamp,
+      content: null,
+    })
   }
-}
 
-function formatTime(t?: string | number) {
-  if (!t) return ''
-  const d = new Date(t)
-  const now = new Date()
-  if (d.toDateString() === now.toDateString()) {
-    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+  const reasoningEvents = events.filter(e => e.eventType === 'chat_reasoning')
+  if (reasoningEvents.length > 0) {
+    const content = reasoningEvents.map(e => String(e.data ?? '')).join('')
+    steps.push({
+      id: 'reasoning',
+      label: 'AI 思考',
+      icon: Cpu,
+      color: '#8b5cf6',
+      startTime: reasoningEvents[0].timestamp,
+      endTime: reasoningEvents[reasoningEvents.length - 1].timestamp,
+      content,
+      count: reasoningEvents.length,
+    })
   }
-  return d.toLocaleDateString('zh-CN', { month: '2-digit', day: '2-digit' })
-}
 
-function eventLabel(eventType: string) {
-  const labels: Record<string, string> = {
-    run_start: 'Run start',
-    chat_start: 'Chat start',
-    chat_token: 'Token',
-    chat_complete: 'Chat complete',
-    run_complete: 'Run complete',
-    run_error: 'Run error',
-    run_cancelled: 'Cancelled'
+  const tokenEvents = events.filter(e => e.eventType === 'chat_token')
+  if (tokenEvents.length > 0) {
+    const content = tokenEvents.map(e => String(e.data ?? '')).join('')
+    steps.push({
+      id: 'response',
+      label: 'AI 回复',
+      icon: ChatLineRound,
+      color: 'var(--c-success)',
+      startTime: tokenEvents[0].timestamp,
+      endTime: tokenEvents[tokenEvents.length - 1].timestamp,
+      content,
+      count: tokenEvents.length,
+    })
   }
-  return labels[eventType] || eventType
+
+  const toolEvents = events.filter(e => e.eventType === 'tool_call' || e.eventType === 'tool_result')
+  for (const te of toolEvents) {
+    const isCall = te.eventType === 'tool_call'
+    steps.push({
+      id: `tool_${te.timestamp}`,
+      label: isCall ? '工具调用' : '工具结果',
+      icon: Tools,
+      color: 'var(--c-warning)',
+      startTime: te.timestamp,
+      endTime: te.timestamp,
+      content: te.data != null ? JSON.stringify(te.data, null, 2) : null,
+    })
+  }
+
+  const summaryEvents = events.filter(e => e.eventType === 'summary_update')
+  if (summaryEvents.length > 0) {
+    steps.push({
+      id: 'summary',
+      label: '对话摘要更新',
+      icon: Document,
+      color: 'var(--c-accent)',
+      startTime: summaryEvents[0].timestamp,
+      endTime: summaryEvents[summaryEvents.length - 1].timestamp,
+      content: summaryEvents.map(e => String(e.data ?? '')).join('\n'),
+    })
+  }
+
+  const chatComplete = events.find(e => e.eventType === 'chat_complete')
+  if (chatComplete) {
+    steps.push({
+      id: 'chat_complete',
+      label: '对话完成',
+      icon: CircleCheck,
+      color: 'var(--c-success)',
+      startTime: chatComplete.timestamp,
+      endTime: chatComplete.timestamp,
+      content: null,
+    })
+  }
+
+  const runComplete = events.find(e => e.eventType === 'run_complete')
+  if (runComplete) {
+    steps.push({
+      id: 'run_complete',
+      label: 'Run 完成',
+      icon: CircleCheck,
+      color: 'var(--c-success)',
+      startTime: runComplete.timestamp,
+      endTime: runComplete.timestamp,
+      content: typeof runComplete.data === 'string' ? runComplete.data : null,
+    })
+  }
+
+  const errorEvent = events.find(e => e.eventType === 'run_error')
+  if (errorEvent) {
+    steps.push({
+      id: 'error',
+      label: 'Run 错误',
+      icon: Close,
+      color: 'var(--c-error)',
+      startTime: errorEvent.timestamp,
+      endTime: errorEvent.timestamp,
+      content: String(errorEvent.data ?? '执行失败'),
+    })
+  }
+
+  const cancelEvent = events.find(e => e.eventType === 'run_cancelled')
+  if (cancelEvent) {
+    steps.push({
+      id: 'cancelled',
+      label: 'Run 已取消',
+      icon: CircleClose,
+      color: 'var(--c-warning)',
+      startTime: cancelEvent.timestamp,
+      endTime: cancelEvent.timestamp,
+      content: null,
+    })
+  }
+
+  return steps
 }
 
-watch(selectedProjectCode, () => {
-  if (sending.value) return
-  activeConversationId.value = undefined
-  conversationCode.value = ''
+// ===== Watch =====
+watch(projectCode, () => {
+  activeConvCode.value = ''
+  activeConvId.value = null
   messages.value = []
-  resetRunInspector()
-  loadConversations(true)
+  resetRunState()
+  loadConversations()
 })
 
-onMounted(loadProjects)
-onBeforeUnmount(closeEventSource)
+// ===== Lifecycle =====
+onMounted(async () => {
+  await loadProjects()
+  await loadConversations()
+})
+
+onBeforeUnmount(() => {
+  if (eventSource) {
+    eventSource.close()
+    eventSource = null
+  }
+})
 </script>
 
 <template>
-  <div class="playground-shell">
-    <aside class="conversation-rail">
-      <div class="rail-head">
-        <div>
-          <p class="eyebrow">Project</p>
-          <h2>{{ selectedProject?.projectName || 'Playground' }}</h2>
+  <div class="pg-shell">
+    <!-- Sidebar -->
+    <aside class="pg-sidebar">
+      <div class="pg-sidebar-head">
+        <div class="pg-sidebar-logo">
+          <el-icon class="logo-icon"><MagicStick /></el-icon>
+          <span>Playground</span>
         </div>
-        <el-button :icon="Refresh" circle :disabled="sending" @click="loadConversations(true)" />
       </div>
 
-      <el-select v-model="selectedProjectCode" class="project-select" placeholder="选择项目" filterable :disabled="sending">
-        <el-option v-for="p in projects" :key="p.id" :label="p.projectName" :value="p.projectCode" />
-      </el-select>
+      <div class="pg-sidebar-section">
+        <label class="pg-label">项目</label>
+        <el-select
+          v-model="projectCode"
+          placeholder="选择项目"
+          size="default"
+          style="width: 100%;"
+        >
+          <el-option v-if="projects.length === 0" value="" label="无可用项目" disabled />
+          <el-option
+            v-for="p in projects"
+            :key="p.projectCode"
+            :label="p.projectName"
+            :value="p.projectCode"
+          />
+        </el-select>
+      </div>
 
-      <el-button class="new-conversation" type="primary" :icon="Plus" :loading="creating" :disabled="sending" @click="handleNewConversation">
-        新建测试会话
-      </el-button>
+      <div class="pg-sidebar-section conv-section">
+        <div class="conv-header">
+          <span class="pg-label">会话 ({{ conversations.length }})</span>
+          <div class="conv-actions">
+            <el-icon
+              class="icon-btn"
+              :class="{ 'is-spinning': loadingConv }"
+              title="刷新"
+              @click="loadConversations"
+            >
+              <Refresh />
+            </el-icon>
+            <el-button
+              size="small"
+              type="primary"
+              :icon="Plus"
+              :disabled="!projectCode"
+              @click="handleNewConversation"
+            >
+              新建
+            </el-button>
+          </div>
+        </div>
+      </div>
 
-      <div ref="convListRef" v-loading="convLoading" class="conversation-list" @scroll="handleConvScroll">
+      <div class="pg-conv-list" ref="convListRef">
+        <div v-if="conversations.length === 0" class="pg-empty">
+          {{ projectCode ? '暂无会话，点击「新建」创建' : '请先选择项目' }}
+        </div>
         <button
           v-for="conv in conversations"
           :key="conv.id"
-          :class="['conversation-item', { active: conv.id === activeConversationId }]"
-          type="button"
-          @click="selectConversation(conv)"
+          :class="['pg-conv-item', { active: activeConvCode === conv.conversationCode }]"
+          @click="handleSelectConversation(conv)"
         >
-          <span class="conversation-title">{{ conv.title || conv.conversationCode }}</span>
-          <span class="conversation-meta">
-            <span>{{ conv.modelName || 'default model' }}</span>
-            <span>{{ formatTime(conv.lastMessageTime || conv.createTime) }}</span>
+          <span class="conv-title">{{ conv.title || conv.conversationCode }}</span>
+          <span class="conv-meta">
+            <el-icon class="conv-meta-icon"><ChatLineRound /></el-icon>
+            {{ conv.modelName || '--' }}
+            <span v-if="conv.lastMessageTime"> · {{ conv.lastMessageTime.replace('T', ' ') }}</span>
           </span>
         </button>
-        <el-empty v-if="!convLoading && !conversations.length" description="暂无会话" :image-size="54" />
-        <div v-if="convLoadingMore" class="list-state">
-          <el-icon class="loading-icon"><Loading /></el-icon>
-          <span>加载中</span>
-        </div>
-        <div v-if="!convHasMore && conversations.length && !convLoadingMore" class="list-state">没有更多了</div>
       </div>
     </aside>
 
-    <main class="chat-console">
-      <header class="console-topbar">
-        <div>
-          <p class="eyebrow">Conversation</p>
-          <h1>{{ activeConversation?.title || '对话后台测试台' }}</h1>
+    <!-- Chat -->
+    <main class="pg-chat">
+      <header class="pg-chat-header">
+        <div class="pg-chat-title">
+          <span class="project-name">{{ selectedProject?.projectName || projectCode || '未选择项目' }}</span>
+          <template v-if="activeConvCode">
+            <span class="divider">/</span>
+            <span class="conv-code mono">{{ activeConvCode }}</span>
+          </template>
         </div>
-        <div class="topbar-actions">
-          <el-tag :type="sending ? 'warning' : conversationCode ? 'success' : 'info'" effect="plain">
-            {{ sending ? 'Streaming' : conversationCode ? 'Ready' : 'Idle' }}
-          </el-tag>
-          <el-button :icon="DocumentCopy" :disabled="!conversationCode" @click="copyConversationCode">复制会话</el-button>
+        <div class="pg-chat-actions">
+          <el-button
+            v-if="!activeConvCode"
+            size="small"
+            type="primary"
+            :icon="Plus"
+            :disabled="!projectCode"
+            @click="handleNewConversation"
+          >
+            新建会话
+          </el-button>
         </div>
       </header>
 
-      <section ref="chatBodyRef" class="message-stage">
-        <div v-if="!conversationCode" class="empty-state">
-          <el-icon><ChatDotRound /></el-icon>
-          <h2>选择历史会话或创建新会话</h2>
-          <p>Playground 用于验证项目模型配置、Run 生命周期、SSE 流式输出和模型思考标签解析。</p>
-        </div>
-        <div v-else-if="!messages.length" class="empty-state conversation-ready-state">
-          <el-icon><Promotion /></el-icon>
-          <h2>会话已创建</h2>
-          <p>在下方输入测试消息，开始验证当前项目的模型配置和流式输出。</p>
-        </div>
-
-        <article v-for="(msg, i) in messages" :key="i" :class="['message-row', msg.role]">
-          <div class="message-avatar">{{ msg.role === 'user' ? 'ME' : 'AI' }}</div>
-          <div class="message-card">
-            <div class="message-head">
-              <strong>{{ msg.role === 'user' ? 'User' : 'Assistant' }}</strong>
-              <span>{{ formatTime(msg.createdAt) }}</span>
-              <el-icon v-if="msg.streaming" class="loading-icon"><Loading /></el-icon>
-            </div>
-            <el-collapse v-if="msg.reasoning" class="reasoning-collapse">
-              <el-collapse-item title="模型思考链路" name="reasoning">
-                <pre>{{ msg.reasoning }}</pre>
-              </el-collapse-item>
-            </el-collapse>
-            <div v-if="msg.content" class="message-content" v-html="renderMarkdown(msg.content, { streaming: msg.streaming })" />
-            <span v-else-if="msg.streaming" class="stream-placeholder">等待模型输出</span>
-          </div>
-        </article>
-      </section>
-
-      <footer class="composer-panel">
-        <el-input
+      <div class="pg-system-prompt">
+        <span class="sp-label">SYSTEM PROMPT</span>
+        <input
           v-model="systemPrompt"
-          type="textarea"
-          :rows="2"
-          placeholder="System prompt，可选。用于临时覆盖本次 Run 的行为约束。"
-          resize="none"
-          :disabled="sending"
+          placeholder="可选。临时覆盖本次 Run 的系统提示词。留空使用项目默认。"
+          class="sp-input"
         />
-        <div class="composer-row">
-          <el-input
-            ref="userInputRef"
-            v-model="userInput"
-            type="textarea"
-            :autosize="{ minRows: 2, maxRows: 6 }"
-            :placeholder="conversationCode ? '输入测试消息，Enter 发送，Shift+Enter 换行' : '先新建或选择一个会话，再输入测试消息'"
-            :disabled="!conversationCode || sending"
-            resize="none"
-            @keydown="handleKeydown"
-          />
-          <el-button v-if="!sending" class="send-button" type="primary" :icon="Promotion" :disabled="!canSend" @click="handleSend">
-            发送
-          </el-button>
-          <el-button v-else class="send-button" type="danger" :icon="VideoPause" @click="handleStop">
-            停止
-          </el-button>
+      </div>
+
+      <div class="pg-chat-body" ref="chatBodyRef">
+        <template v-if="activeConvCode">
+          <div v-if="messages.length === 0" class="pg-empty-state">
+            <div class="empty-icon">
+              <el-icon><MagicStick /></el-icon>
+            </div>
+            <p>输入消息开始对话</p>
+          </div>
+
+          <div v-for="msg in messages" :key="msg.id" :class="['pg-msg', msg.role]">
+            <div class="msg-avatar">
+              <el-icon v-if="msg.role === 'user'"><User /></el-icon>
+              <el-icon v-else><Avatar /></el-icon>
+            </div>
+            <div class="msg-bubble-wrap">
+              <div v-if="msg.reasoning" class="msg-reasoning">
+                <div class="reasoning-label">
+                  <el-icon><Cpu /></el-icon>
+                  思考过程
+                </div>
+                <div class="reasoning-content">{{ msg.reasoning }}</div>
+              </div>
+              <div :class="['msg-bubble', { 'is-error': msg.status === 'error' }]">
+                <div v-if="msg.role === 'assistant' && msg.content" v-html="renderMarkdown(msg.content)"></div>
+                <template v-else-if="msg.role === 'user'">{{ msg.content }}</template>
+                <span v-if="msg.status === 'running'" class="typing-dot"></span>
+              </div>
+            </div>
+          </div>
+        </template>
+
+        <div v-else class="pg-empty-state">
+          <div class="empty-icon primary">
+            <el-icon><Plus /></el-icon>
+          </div>
+          <p>选择历史会话或点击「新建会话」开始对话</p>
         </div>
-      </footer>
+      </div>
+
+      <div class="pg-composer">
+        <div class="composer-input-wrap">
+          <textarea
+            v-model="userInput"
+            :placeholder="activeConvCode ? '输入消息，Enter 发送，Shift+Enter 换行' : '请先选择或创建会话'"
+            :disabled="!activeConvCode || isRunning"
+            class="composer-textarea"
+            @keydown.enter.exact.prevent="handlePromotion"
+          ></textarea>
+          <div class="composer-actions">
+            <el-button
+              v-if="isRunning"
+              type="danger"
+              :icon="VideoPause"
+              size="small"
+              @click="handleCancel"
+            >
+              停止
+            </el-button>
+            <el-button
+              v-else
+              type="primary"
+              :icon="Promotion"
+              size="small"
+              :disabled="!activeConvCode || !userInput.trim()"
+              @click="handlePromotion"
+            >
+              发送
+            </el-button>
+          </div>
+        </div>
+      </div>
     </main>
 
-    <aside class="inspector-panel">
-      <section class="metric-grid">
-        <div class="metric-cell">
-          <el-icon><Connection /></el-icon>
-          <span>Run</span>
-          <strong>{{ currentRunCode || '--' }}</strong>
-        </div>
-        <div class="metric-cell">
-          <el-icon><Clock /></el-icon>
-          <span>Duration</span>
-          <strong>{{ runDuration }}</strong>
-        </div>
-        <div class="metric-cell">
-          <el-icon><Cpu /></el-icon>
-          <span>Model</span>
-          <strong>{{ activeModelName }}</strong>
-        </div>
-        <div class="metric-cell">
-          <el-icon><Warning /></el-icon>
-          <span>Chars</span>
-          <strong>{{ tokenCount }}</strong>
-        </div>
-      </section>
+    <!-- Inspector -->
+    <aside class="pg-inspector">
+      <div class="pg-inspector-head">
+        <h3>Run Inspector</h3>
+        <p class="run-code mono">{{ runCode || '等待 Run 启动…' }}</p>
+      </div>
 
-      <section class="inspector-section">
-        <div class="section-title">
-          <span>思考链路</span>
-          <el-tag size="small" :type="hasReasoning ? 'success' : 'info'" effect="plain">{{ hasReasoning ? 'Detected' : 'Waiting' }}</el-tag>
+      <div class="pg-inspector-stats">
+        <div class="stat-item">
+          <span class="stat-label">耗时</span>
+          <span class="stat-value mono">{{ runDuration }}</span>
         </div>
-        <pre v-if="latestReasoning" class="reasoning-preview">{{ latestReasoning }}</pre>
-        <p v-else class="muted-text">当前后端未单独推送 reasoning 事件；这里会解析模型输出中的 &lt;think&gt;...&lt;/think&gt; 片段。</p>
-      </section>
+        <div class="stat-item">
+          <span class="stat-label">回复 Token</span>
+          <span class="stat-value mono">{{ tokenCount }}</span>
+        </div>
+        <div class="stat-item">
+          <span class="stat-label">思考片段</span>
+          <span class="stat-value mono">{{ reasoningCount }}</span>
+        </div>
+      </div>
 
-      <section class="inspector-section event-section">
-        <div class="section-title">
-          <span>SSE 事件</span>
-          <el-tag size="small" effect="plain">{{ runEvents.length }}</el-tag>
-        </div>
-        <div class="event-list">
-          <div v-for="(event, index) in runEvents" :key="`${event.timestamp}-${index}`" class="event-item">
-            <span class="event-dot" />
-            <div>
-              <div class="event-line">
-                <strong>{{ eventLabel(event.eventType) }}</strong>
-                <span>{{ formatTime(event.timestamp) }}</span>
+      <div class="pg-inspector-tabs">
+        <button
+          :class="['tab-btn', { active: inspectorTab === 'messages' }]"
+          @click="inspectorTab = 'messages'"
+        >
+          <el-icon><List /></el-icon> Messages
+        </button>
+        <button
+          :class="['tab-btn', { active: inspectorTab === 'trace' }]"
+          @click="inspectorTab = 'trace'"
+        >
+          <el-icon><VideoPlay /></el-icon> Trace
+        </button>
+      </div>
+
+      <div class="pg-inspector-body">
+        <template v-if="inspectorTab === 'messages'">
+          <div v-if="runEvents.length === 0" class="inspector-empty">
+            暂无数据，发起对话后显示
+          </div>
+          <div v-else class="message-stack">
+            <div class="stack-section">
+              <div class="stack-section-title">请求消息</div>
+              <div v-if="requestMessages.length === 0" class="stack-empty">无</div>
+              <div v-for="(m, i) in requestMessages" :key="i" class="stack-msg">
+                <span class="stack-role">{{ m.role }}</span>
+                <div class="stack-content">{{ m.content }}</div>
               </div>
-              <p v-if="event.dataPreview">{{ event.dataPreview }}</p>
-              <small v-if="event.taskState">{{ event.taskState }}</small>
+            </div>
+            <div class="stack-section">
+              <div class="stack-section-title">AI 思考</div>
+              <div v-if="!responseReasoning" class="stack-empty">无</div>
+              <pre v-else class="stack-pre">{{ responseReasoning }}</pre>
+            </div>
+            <div class="stack-section">
+              <div class="stack-section-title">AI 回复</div>
+              <div v-if="!responseText" class="stack-empty">无</div>
+              <div v-else class="stack-text" v-html="renderMarkdown(responseText)"></div>
             </div>
           </div>
-          <p v-if="!runEvents.length" class="muted-text">发送消息后显示 run_start、chat_token、run_complete 等事件。</p>
-        </div>
-      </section>
+        </template>
+
+        <template v-else>
+          <div v-if="timelineSteps.length === 0" class="inspector-empty">
+            暂无 Trace，发起对话后显示
+          </div>
+          <div v-else class="trace-list">
+            <div v-for="step in timelineSteps" :key="step.id" class="trace-step">
+              <div class="trace-step-head" :style="{ color: step.color }">
+                <div class="trace-step-icon">
+                  <el-icon><component :is="step.icon" /></el-icon>
+                </div>
+                <span class="trace-step-label">{{ step.label }}</span>
+                <span v-if="step.count" class="trace-step-count">{{ step.count }}</span>
+                <span v-if="step.startTime !== step.endTime" class="trace-step-duration">
+                  {{ durationLabel(step.startTime, step.endTime) }}
+                </span>
+              </div>
+              <div v-if="step.content" class="trace-step-content">
+                <pre>{{ step.content }}</pre>
+              </div>
+            </div>
+          </div>
+        </template>
+      </div>
     </aside>
 
-    <el-dialog v-model="variableDialogVisible" title="创建会话变量" width="520px">
-      <el-form label-width="120px">
-        <el-form-item
-          v-for="item in pendingVariables"
-          :key="item.name"
-          :label="item.label || item.name"
-          :required="item.required"
-        >
-          <el-select v-if="item.type === 'boolean'" v-model="contextVariableForm[item.name]" placeholder="请选择" style="width: 100%;">
-            <el-option label="true" :value="true" />
-            <el-option label="false" :value="false" />
-          </el-select>
-          <el-input v-else v-model="contextVariableForm[item.name]" :placeholder="item.description || item.name" />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <el-button @click="variableDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="creating" @click="confirmCreateConversation">创建</el-button>
-      </template>
-    </el-dialog>
+    <!-- Variable Dialog -->
+    <div v-if="variableDialogOpen" class="pg-dialog-mask" @click.self="variableDialogOpen = false">
+      <div class="pg-dialog">
+        <div class="pg-dialog-head">
+          <h2>创建会话变量</h2>
+        </div>
+        <div class="pg-dialog-body">
+          <div v-for="item in pendingVariables" :key="item.name" class="form-item">
+            <label class="form-label">
+              {{ item.label || item.name }}
+              <span v-if="item.required" class="required">*</span>
+            </label>
+            <select
+              v-if="item.type === 'boolean'"
+              :value="String(contextVariableForm[item.name] ?? '')"
+              @change="(e: any) => contextVariableForm[item.name] = e.target.value"
+              class="form-select"
+            >
+              <option value="">请选择</option>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+            <input
+              v-else
+              :value="String(contextVariableForm[item.name] ?? '')"
+              @input="(e: any) => contextVariableForm[item.name] = e.target.value"
+              :placeholder="item.description || item.name"
+              class="form-input"
+            />
+          </div>
+        </div>
+        <div class="pg-dialog-foot">
+          <el-button @click="variableDialogOpen = false">取消</el-button>
+          <el-button type="primary" @click="handleConfirmVariables">创建</el-button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
+
+<style scoped>
+.pg-shell {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr) 340px;
+  height: calc(100vh - 56px - 40px);
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+}
+
+/* ===== Sidebar ===== */
+.pg-sidebar {
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--c-border);
+  background: var(--c-surface);
+  min-height: 0;
+}
+
+.pg-sidebar-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.pg-sidebar-logo {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--c-text-1);
+}
+
+.logo-icon {
+  width: 28px;
+  height: 28px;
+  background: var(--c-primary-soft);
+  color: var(--c-primary);
+  border-radius: 7px;
+  padding: 5px;
+  font-size: 18px;
+}
+
+.pg-sidebar-section {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.pg-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-3);
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  margin-bottom: 8px;
+}
+
+.conv-section {
+  padding-bottom: 8px;
+}
+
+.conv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+
+.conv-header .pg-label {
+  margin-bottom: 0;
+}
+
+.conv-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.icon-btn {
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  color: var(--c-text-3);
+  font-size: 14px;
+  transition: all 0.15s ease;
+}
+
+.icon-btn:hover {
+  color: var(--c-text-1);
+  background: var(--c-surface-hover);
+}
+
+.icon-btn.is-spinning {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.pg-conv-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 0;
+}
+
+.pg-empty {
+  padding: 24px 16px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.pg-conv-item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 10px 16px;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.pg-conv-item:hover {
+  background: var(--c-surface-hover);
+}
+
+.pg-conv-item.active {
+  background: var(--c-primary-bg);
+  border-left-color: var(--c-primary);
+}
+
+.conv-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--c-text-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-conv-item.active .conv-title {
+  color: var(--c-primary);
+  font-weight: 600;
+}
+
+.conv-meta {
+  font-size: 11px;
+  color: var(--c-text-3);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conv-meta-icon {
+  font-size: 11px;
+}
+
+/* ===== Chat ===== */
+.pg-chat {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: var(--c-bg);
+}
+
+.pg-chat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
+  flex-shrink: 0;
+}
+
+.pg-chat-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.project-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text-1);
+}
+
+.divider {
+  color: var(--c-border-strong);
+}
+
+.conv-code {
+  font-size: 12px;
+  color: var(--c-text-3);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.pg-system-prompt {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 20px;
+  border-bottom: 1px solid var(--c-border);
+  background: var(--c-surface);
+  flex-shrink: 0;
+}
+
+.sp-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--c-primary);
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+
+.sp-input {
+  flex: 1;
+  height: 30px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  color: var(--c-text-1);
+  outline: none;
+  padding: 0 8px;
+  border-radius: 4px;
+  transition: background 0.15s ease;
+  font-family: var(--font-sans);
+}
+
+.sp-input::placeholder {
+  color: var(--c-text-3);
+  opacity: 0.6;
+}
+
+.sp-input:focus {
+  background: var(--c-surface-hover);
+}
+
+.pg-chat-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 24px 28px;
+}
+
+.pg-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  gap: 12px;
+  color: var(--c-text-3);
+  font-size: 13px;
+}
+
+.empty-icon {
+  width: 56px;
+  height: 56px;
+  background: var(--c-surface-hover);
+  border-radius: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  color: var(--c-text-3);
+}
+
+.empty-icon.primary {
+  background: var(--c-primary-soft);
+  color: var(--c-primary);
+}
+
+.pg-msg {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 20px;
+  max-width: 85%;
+}
+
+.pg-msg.user {
+  flex-direction: row-reverse;
+  margin-left: auto;
+}
+
+.msg-avatar {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.pg-msg.user .msg-avatar {
+  background: var(--c-primary);
+  color: white;
+}
+
+.pg-msg.assistant .msg-avatar {
+  background: var(--c-surface);
+  color: var(--c-primary);
+  border: 1px solid var(--c-border);
+}
+
+.msg-bubble-wrap {
+  min-width: 0;
+}
+
+.msg-reasoning {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 10px 10px 2px 10px;
+  padding: 10px 12px;
+  margin-bottom: 6px;
+  max-width: 100%;
+}
+
+.reasoning-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #8b5cf6;
+  margin-bottom: 6px;
+}
+
+.reasoning-content {
+  font-size: 12px;
+  line-height: 1.6;
+  color: var(--c-text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 200px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+}
+
+.msg-bubble {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--c-text-1);
+  word-break: break-word;
+  position: relative;
+}
+
+.pg-msg.user .msg-bubble {
+  background: var(--c-primary);
+  color: white;
+  border-color: var(--c-primary);
+  border-radius: 10px 2px 10px 10px;
+}
+
+.msg-bubble.is-error {
+  background: var(--c-error-soft);
+  border-color: var(--c-error);
+  color: var(--c-error);
+}
+
+.msg-bubble :deep(p) {
+  margin: 0 0 8px;
+}
+
+.msg-bubble :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.msg-bubble :deep(code) {
+  background: var(--c-bg-soft);
+  padding: 2px 5px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.pg-msg.user .msg-bubble :deep(code) {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+.msg-bubble :deep(pre) {
+  background: var(--c-text-1);
+  color: var(--c-text-inverse);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  margin: 8px 0;
+}
+
+.msg-bubble :deep(pre code) {
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+.typing-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: var(--c-text-3);
+  border-radius: 50%;
+  margin-left: 4px;
+  animation: typing 1.2s infinite;
+  vertical-align: middle;
+}
+
+@keyframes typing {
+  0%, 60%, 100% { opacity: 0.3; }
+  30% { opacity: 1; }
+}
+
+/* ===== Composer ===== */
+.pg-composer {
+  padding: 12px 20px 16px;
+  border-top: 1px solid var(--c-border);
+  background: var(--c-surface);
+  flex-shrink: 0;
+}
+
+.composer-input-wrap {
+  background: var(--c-surface);
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  overflow: hidden;
+  transition: all 0.15s ease;
+}
+
+.composer-input-wrap:focus-within {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px var(--c-primary-soft);
+}
+
+.composer-textarea {
+  width: 100%;
+  min-height: 60px;
+  max-height: 150px;
+  padding: 12px 14px;
+  border: none;
+  resize: none;
+  font-size: 13px;
+  font-family: var(--font-sans);
+  line-height: 1.5;
+  color: var(--c-text-1);
+  background: transparent;
+  outline: none;
+}
+
+.composer-textarea::placeholder {
+  color: var(--c-text-3);
+}
+
+.composer-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--c-border-subtle);
+}
+
+/* ===== Inspector ===== */
+.pg-inspector {
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--c-border);
+  background: var(--c-surface);
+  min-height: 0;
+}
+
+.pg-inspector-head {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.pg-inspector-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-1);
+}
+
+.run-code {
+  margin: 3px 0 0;
+  font-size: 11px;
+  color: var(--c-text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pg-inspector-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1px;
+  background: var(--c-border);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.stat-item {
+  background: var(--c-surface);
+  padding: 10px 8px;
+  text-align: center;
+}
+
+.stat-label {
+  display: block;
+  font-size: 10px;
+  color: var(--c-text-3);
+  margin-bottom: 3px;
+}
+
+.stat-value {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--c-text-1);
+}
+
+.pg-inspector-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.tab-btn {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 8px;
+  background: transparent;
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--c-text-3);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.tab-btn:hover {
+  background: var(--c-surface-hover);
+  color: var(--c-text-1);
+}
+
+.tab-btn.active {
+  background: var(--c-primary);
+  color: white;
+}
+
+.tab-btn .el-icon {
+  font-size: 13px;
+}
+
+.pg-inspector-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.inspector-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--c-text-3);
+  font-size: 12px;
+}
+
+.message-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.stack-section {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.stack-section-title {
+  padding: 7px 10px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-2);
+  background: var(--c-bg-soft);
+  border-bottom: 1px solid var(--c-border);
+}
+
+.stack-empty {
+  padding: 10px;
+  font-size: 12px;
+  color: var(--c-text-3);
+  text-align: center;
+}
+
+.stack-msg {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--c-border-subtle);
+}
+
+.stack-msg:last-child {
+  border-bottom: none;
+}
+
+.stack-role {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--c-primary);
+  text-transform: uppercase;
+  margin-bottom: 4px;
+}
+
+.stack-content {
+  font-size: 12px;
+  color: var(--c-text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.stack-pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--c-text-2);
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.5;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.stack-text {
+  padding: 8px 10px;
+  font-size: 12px;
+  color: var(--c-text-2);
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.stack-text :deep(p) {
+  margin: 0 0 6px;
+}
+
+.stack-text :deep(p:last-child) {
+  margin-bottom: 0;
+}
+
+.stack-text :deep(code) {
+  background: var(--c-bg-soft);
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+/* ===== Trace ===== */
+.trace-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.trace-step {
+  border: 1px solid var(--c-border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.trace-step-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: var(--c-surface-hover);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.trace-step-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+}
+
+.trace-step-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trace-step-count {
+  font-size: 10px;
+  font-weight: 600;
+  background: currentColor;
+  color: var(--c-surface);
+  padding: 1px 5px;
+  border-radius: 10px;
+  opacity: 0.2;
+}
+
+.trace-step-duration {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+.trace-step-content {
+  max-height: 200px;
+  overflow: auto;
+}
+
+.trace-step-content pre {
+  margin: 0;
+  padding: 8px 10px;
+  font-size: 11px;
+  font-family: var(--font-mono);
+  color: var(--c-text-2);
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+  background: var(--c-bg-soft);
+}
+
+/* ===== Dialog ===== */
+.pg-dialog-mask {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.pg-dialog {
+  width: 480px;
+  max-width: calc(100vw - 32px);
+  background: var(--c-surface);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.pg-dialog-head {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--c-border);
+}
+
+.pg-dialog-head h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--c-text-1);
+}
+
+.pg-dialog-body {
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.form-item {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.form-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--c-text-2);
+}
+
+.required {
+  color: var(--c-error);
+  margin-left: 2px;
+}
+
+.form-input,
+.form-select {
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--c-border);
+  border-radius: 7px;
+  font-size: 13px;
+  color: var(--c-text-1);
+  background: var(--c-surface);
+  outline: none;
+  transition: all 0.15s ease;
+  font-family: var(--font-sans);
+}
+
+.form-input:focus,
+.form-select:focus {
+  border-color: var(--c-primary);
+  box-shadow: 0 0 0 3px var(--c-primary-soft);
+}
+
+.pg-dialog-foot {
+  padding: 12px 18px;
+  border-top: 1px solid var(--c-border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+</style>

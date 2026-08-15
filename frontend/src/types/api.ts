@@ -163,12 +163,155 @@ export interface CreateRunResponse {
   traceId: string | null
 }
 
+export type RunEventType =
+  | 'run_start'
+  | 'chat_start'
+  | 'request_messages'
+  | 'chat_reasoning'
+  | 'chat_token'
+  | 'tool_call'
+  | 'tool_result'
+  | 'chat_complete'
+  | 'summary_update'
+  | 'run_complete'
+  | 'run_error'
+  | 'run_cancelled'
+
 export interface RunStreamEnvelope {
-  eventType: 'run_start' | 'chat_start' | 'chat_token' | 'chat_complete' | 'run_complete' | 'run_error' | 'run_cancelled'
+  eventType: RunEventType
   runCode: string
   conversationCode: string
   timestamp: number
   taskState: string | null
   data: unknown
   traceId: string | null
+}
+
+// ===== CLI Capability Management =====
+
+export interface CliCommandDTO {
+  id?: number
+  commandName: string
+  commandPrefix: string
+  commandGroup: string
+  commandAction: string
+  cliTemplate?: string
+  description: string
+  commandType: 'API' | 'PAGE'
+  state: number
+  boundCount?: number
+  createTime?: string
+  updateTime?: string
+}
+
+export interface CliParamDTO {
+  id?: number
+  paramName: string
+  paramFlag?: string
+  paramType: 'String' | 'Number' | 'Boolean' | 'Array' | 'Object'
+  itemType?: string
+  isRequired: number
+  description?: string
+  defaultValue?: string
+  sortOrder?: number
+  parentParamName?: string
+}
+
+export interface ToolDefinitionDTO {
+  id?: number
+  toolName?: string
+  description?: string
+  schemaCode?: string
+  url: string
+  method: string
+  authType?: string
+  requestSchema?: string
+  responseSchema?: string
+}
+
+export interface PageDefinitionDTO {
+  id?: number
+  pageName?: string
+  pagePrefix?: string
+  pageRoute: string
+  displayType?: string
+  targetType?: string
+  resourceProject?: string
+  resourceIds?: string
+}
+
+export interface CliRecallTagDTO {
+  id?: number
+  tagType: string
+  tagValue: string
+  weight?: number
+  matchMode?: string
+  sortOrder?: number
+}
+
+export interface CliCommandDetailDTO {
+  id?: number
+  commandName: string
+  commandPrefix: string
+  commandGroup: string
+  commandAction: string
+  cliTemplate?: string
+  description: string
+  commandType: 'API' | 'PAGE'
+  state: number
+  params: CliParamDTO[]
+  tool?: ToolDefinitionDTO
+  page?: PageDefinitionDTO
+  recallTags: CliRecallTagDTO[]
+  createTime?: string
+  updateTime?: string
+}
+
+export interface CliCommandPageRequest {
+  keyword?: string
+  commandType?: string
+  commandPrefix?: string
+  state?: number
+  current?: number
+  size?: number
+}
+
+
+// ===== API Schema 配置 =====
+
+export interface ApiSchemaConfigDTO {
+  id?: number
+  schemaCode: string
+  schemaName: string
+  baseUrl: string
+  commandPrefix?: string
+  state: number
+  createUser?: string
+  modifyUser?: string
+  createTime?: string
+  updateTime?: string
+}
+
+export interface ApiSchemaConfigPageRequest {
+  keyword?: string
+  state?: number
+  current?: number
+  size?: number
+}
+
+export interface BindCapabilityOptionDTO {
+  id: number
+  commandName: string
+  commandType: string
+  description: string
+  bound: boolean
+}
+
+export interface BindOptionsResponse {
+  cliOptions: BindCapabilityOptionDTO[]
+}
+
+export interface BindCapabilitiesRequest {
+  id: number
+  cliIds: number[]
 }

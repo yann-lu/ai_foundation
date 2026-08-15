@@ -80,6 +80,11 @@ prefix_log() {
 # ------------------------------------------------------------
 # 1. 启动后端
 # ------------------------------------------------------------
+echo -e "${BLUE}🧹 执行 mvn clean (跳过测试)...${NC}"
+cd "$BACKEND_DIR"
+mvn clean install -DskipTests -q
+echo -e "${BLUE}   mvn clean 完成${NC}"
+
 echo -e "${BLUE}🚀 启动后端服务 (端口 8080)...${NC}"
 cd "$BACKEND_DIR"
 mvn -Pqa -pl ai-foundation-gateway spring-boot:run -q \
