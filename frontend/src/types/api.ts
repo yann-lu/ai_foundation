@@ -316,3 +316,67 @@ export interface BindCapabilitiesRequest {
   id: number
   cliIds: number[]
 }
+
+// ===== Skill =====
+export interface AgentSkillDTO {
+  id?: number
+  skillName: string
+  skillCode: string
+  description?: string
+  skillType: string
+  systemPrompt?: string
+  configJson?: string
+  state: number
+  cliIds?: number[]
+  createUser?: string
+  createTime?: string
+  updateTime?: string
+}
+
+export interface AgentSkillPageRequest {
+  keyword?: string
+  skillType?: string
+  state?: number
+  current?: number
+  size?: number
+}
+
+export interface SkillBindOptionDTO {
+  id: number
+  skillName: string
+  skillType: string
+  description?: string
+  bound: boolean
+}
+
+export interface BindSkillsRequest {
+  id: number
+  skillIds: number[]
+}
+
+// ===== MCP Server =====
+export interface AgentMcpServerDTO {
+  id?: number
+  serverCode: string
+  serverName: string
+  description?: string
+  transportType: string
+  command?: string
+  workingDir?: string
+  envVars?: string
+  baseUrl?: string
+  authType?: string
+  authConfig?: string
+  state: number
+  createUser?: string
+  createTime?: string
+  updateTime?: string
+}
+
+export interface AgentMcpServerPageRequest {
+  keyword?: string
+  transportType?: string
+  state?: number
+  current?: number
+  size?: number
+}

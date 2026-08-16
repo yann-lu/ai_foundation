@@ -33,9 +33,16 @@ public class AgentProjectCliMappingServiceImpl
     }
 
     @Override
+    public void removeByProjectIdAndCliIds(Long projectId, List<Long> cliIds) {
+        if (cliIds == null || cliIds.isEmpty()) {
+            return;
+        }
+        baseMapper.deleteByProjectIdAndCliIdsPhysical(projectId, cliIds);
+    }
+
+    @Override
     public void removeByCliId(Long cliId) {
-        this.remove(new LambdaQueryWrapper<AgentProjectCliMapping>()
-                .eq(AgentProjectCliMapping::getCliId, cliId));
+        baseMapper.deleteByCliIdPhysical(cliId);
     }
 
     @Override

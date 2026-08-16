@@ -10,7 +10,7 @@ import {
 } from '@element-plus/icons-vue'
 import { pageProjects } from '@/api/project'
 import { pageConversations } from "@/api/conversation"
-import { createConversation, createRun, streamRunEvents, cancelRun, getMessages, getRunDetail } from "@/api/chat"
+import { createConversation, createRun, streamRunEvents, cancelRun, getMessages, getRunDetail, listRunEvents, pageRuns } from "@/api/chat"
 import { parseThink } from '@/utils/think-parser'
 import { renderMarkdown } from '@/utils/markdown'
 import type { AgentProjectDTO, ConversationDTO, MessageDTO, RunStreamEnvelope } from '@/types/api'
@@ -97,7 +97,15 @@ const isRunning = ref(false)
 const messages = ref<ChatMessage[]>([])
 const chatBodyRef = ref<HTMLElement>()
 
-const runEvents = ref<RunEventLog[]>([])
+const runEventsMap = ref<Map<string, RunEventLog[]>>(new Map())
+const activeTraceRunCode = ref('')
+const runCodeList = computed(() => {
+  return Array.from(runEventsMap.value.keys()).reverse()
+})
+const runEvents = computed(() => {
+  if (!activeTraceRunCode.value) return []
+  return runEventsMap.value.get(activeTraceRunCode.value) || []
+})
 const runCode = ref('')
 const runStartedAt = ref<number | null>(null)
 const runFinishedAt = ref<number | null>(null)
@@ -115,6 +123,16 @@ const contextVariableForm = ref<Record<string, unknown>>({})
 
 let eventSource: EventSource | null = null
 let assistantMsgId = ''
+
+// 运行状态指示（对话气泡中显示）
+const currentAction = ref<'thinking' | 'tool' | 'waiting' | 'timeout'>('waiting')
+const currentToolName = ref('')
+const thinkingPreview = ref('')
+let runTimeoutTimer: ReturnType<typeof setTimeout> | null = null
+let toolRetryCount = 0
+const MAX_TOOL_RETRIES = 3
+const THINKING_TIMEOUT_MS = 60000
+const TOOL_TIMEOUT_MS = 30000
 
 // ===== Computed =====
 const selectedProject = computed(() =>
@@ -179,6 +197,19 @@ const flowEvents = computed(() => buildFlowEvents(runEvents.value))
 
 // ===== Trace View =====
 const traceEntries = computed(() => buildTraceEntries(runEvents.value))
+const expandedEntryIds = ref<Set<string>>(new Set())
+
+function isEntryExpanded(id: string): boolean {
+  return expandedEntryIds.value.has(id)
+}
+
+function toggleEntryExpand(id: string) {
+  if (expandedEntryIds.value.has(id)) {
+    expandedEntryIds.value.delete(id)
+  } else {
+    expandedEntryIds.value.add(id)
+  }
+}
 
 const traceStats = computed(() => {
   const entries = traceEntries.value
@@ -283,6 +314,10 @@ async function loadConversations() {
       const bTime = b.lastMessageTime ? new Date(b.lastMessageTime).getTime() : (b.createTime ? new Date(b.createTime).getTime() : 0)
       return bTime - aTime
     })
+    // 如果当前没有选中会话，自动选中最新的一个并加载消息
+    if (!activeConvCode.value && conversations.value.length > 0) {
+      handleSelectConversation(conversations.value[0])
+    }
   } catch {
     conversations.value = []
   } finally {
@@ -300,6 +335,33 @@ async function handleSelectConversation(conv: ConversationDTO) {
   activeConvId.value = conv.id
   resetRunState()
   await loadConversationMessages(conv.conversationCode)
+  // 加载最新 run 的事件日志（用于轨迹回放）
+  await loadLatestRunEvents(conv.conversationCode)
+}
+
+async function loadLatestRunEvents(conversationCode: string) {
+  try {
+    // 获取会话最新一条 run
+    const latestUrl = '/chat/runs/latest?conversationCode=' + encodeURIComponent(conversationCode)
+    const latestRes = await fetch(latestUrl)
+    if (!latestRes.ok) return
+    const latestJson = await latestRes.json()
+    const latestRun = latestJson?.data
+    if (!latestRun || !latestRun.runCode) return
+    runCode.value = latestRun.runCode
+    // 加载事件日志到 Map
+    const eventsRes = await listRunEvents(latestRun.runCode)
+    const eventList: RunEventLog[] = (eventsRes.data || []).map((e: any) => ({
+      eventType: e.eventType,
+      data: e.eventData,
+      taskState: e.taskState,
+      timestamp: e.timestamp,
+    }))
+    runEventsMap.value.set(latestRun.runCode, eventList)
+    activeTraceRunCode.value = latestRun.runCode
+  } catch {
+    // ignore
+  }
 }
 
 async function loadConversationMessages(code: string) {
@@ -331,10 +393,17 @@ async function loadConversationMessages(code: string) {
 }
 
 function resetRunState() {
-  runEvents.value = []
   runCode.value = ''
   runStartedAt.value = null
   runFinishedAt.value = null
+  currentAction.value = 'waiting'
+  currentToolName.value = ''
+  thinkingPreview.value = ''
+  toolRetryCount = 0
+  if (runTimeoutTimer) {
+    clearTimeout(runTimeoutTimer)
+    runTimeoutTimer = null
+  }
 }
 
 async function handleNewConversation() {
@@ -426,10 +495,7 @@ async function handlePromotion() {
 
   let rawBuffer = ''
   let reasoningBuffer = ''
-  // 当前执行状态，用于对话视图中显示 AI 正在做什么
-  const currentAction = ref<'thinking' | 'tool' | 'waiting'>('waiting')
-  const currentToolName = ref('')
-  const thinkingPreview = ref('')
+  // 运行状态变量已在顶层声明
 
   try {
     const createRes = await createRun({
@@ -451,12 +517,22 @@ async function handlePromotion() {
           return
         }
 
-        runEvents.value.push({
-          eventType: env.eventType,
-          taskState: env.taskState,
-          data: env.data,
-          timestamp: env.timestamp || Date.now(),
-        })
+        const currentRunCode = runCode.value
+        if (currentRunCode) {
+          if (!runEventsMap.value.has(currentRunCode)) {
+            runEventsMap.value.set(currentRunCode, [])
+          }
+          runEventsMap.value.get(currentRunCode)!.push({
+            eventType: env.eventType,
+            taskState: env.taskState,
+            data: env.data,
+            timestamp: env.timestamp || Date.now(),
+          })
+          // 新对话进行中时，默认看当前 run 的轨迹
+          if (activeTraceRunCode.value !== currentRunCode) {
+            activeTraceRunCode.value = currentRunCode
+          }
+        }
 
         if (env.eventType === 'chat_token') {
           rawBuffer += String(env.data ?? '')
@@ -473,13 +549,20 @@ async function handlePromotion() {
             thinkingPreview.value = reasoningBuffer.slice(0, 150)
           }
           currentAction.value = 'thinking'
+          // 收到思考内容，重置思考超时
+          scheduleThinkingTimeout()
         } else if (env.eventType === 'tool_call') {
           const tc = env.data as Record<string, unknown> | null
           currentToolName.value = tc && typeof tc.name === 'string' ? tc.name : ''
           currentAction.value = 'tool'
+          toolRetryCount = 0
+          // 工具调用超时保护
+          scheduleToolTimeout()
         } else if (env.eventType === 'tool_result') {
           currentAction.value = 'thinking'
           currentToolName.value = ''
+          toolRetryCount = 0
+          scheduleThinkingTimeout()
         } else if (env.eventType === 'run_complete') {
           runFinishedAt.value = Date.now()
           // Try multiple sources for the final reply
@@ -523,6 +606,7 @@ async function handlePromotion() {
           currentAction.value = 'waiting'
           currentToolName.value = ''
           thinkingPreview.value = ''
+          clearRunTimeout()
           scrollToBottom()
           resolve()
         } else if (env.eventType === 'run_error') {
@@ -537,6 +621,7 @@ async function handlePromotion() {
           currentAction.value = 'waiting'
           currentToolName.value = ''
           thinkingPreview.value = ''
+          clearRunTimeout()
           ElMessage.error(String(env.data ?? '执行失败'))
           reject(new Error(String(env.data ?? '执行失败')))
         } else if (env.eventType === 'run_cancelled') {
@@ -556,10 +641,12 @@ async function handlePromotion() {
       }
 
       source.onerror = async () => {
+        clearRunTimeout()
         runFinishedAt.value = Date.now()
-        // 连接断开时，如果还没有收到完成事件，尝试从详情接口拉取最终结果
+        // 连接断开时，尝试从详情接口拉取最终结果
         try {
-          const detail = await getRunDetail(runCode.value)
+          const res = await getRunDetail(runCode.value)
+          const detail = res?.data || res
           if (detail?.reply) {
             const finalParsed = parseThink(detail.reply)
             const reasoning = detail.reasoning || finalParsed.reasoning || reasoningBuffer || ''
@@ -571,6 +658,7 @@ async function handlePromotion() {
             })
             source.close()
             isRunning.value = false
+            currentAction.value = 'waiting'
             eventSource = null
             resolve()
             return
@@ -584,6 +672,7 @@ async function handlePromotion() {
         })
         source.close()
         isRunning.value = false
+        currentAction.value = 'waiting'
         eventSource = null
         reject(new Error('SSE 连接中断'))
       }
@@ -605,6 +694,99 @@ function updateAssistantMessage(id: string, updates: Partial<ChatMessage>) {
   const idx = messages.value.findIndex(m => m.id === id)
   if (idx !== -1) {
     messages.value[idx] = { ...messages.value[idx], ...updates }
+  }
+}
+
+// ========== 超时与重试 ==========
+
+function clearRunTimeout() {
+  if (runTimeoutTimer) {
+    clearTimeout(runTimeoutTimer)
+    runTimeoutTimer = null
+  }
+}
+
+// 思考阶段超时：60 秒没收到新内容则尝试从详情接口拉取
+function scheduleThinkingTimeout() {
+  clearRunTimeout()
+  runTimeoutTimer = setTimeout(() => {
+    if (isRunning.value && currentAction.value === 'thinking') {
+      tryFetchRunDetail()
+    }
+  }, THINKING_TIMEOUT_MS)
+}
+
+// 工具调用超时：30 秒没返回，最多重试 3 次，全部失败则放弃该工具
+function scheduleToolTimeout() {
+  clearRunTimeout()
+  runTimeoutTimer = setTimeout(() => {
+    if (!isRunning.value || currentAction.value !== 'tool') return
+
+    toolRetryCount++
+    if (toolRetryCount < MAX_TOOL_RETRIES) {
+      // 显示重试提示
+      thinkingPreview.value = `工具调用超时，正在重试 (${toolRetryCount}/${MAX_TOOL_RETRIES})...`
+      currentAction.value = 'thinking'
+      // 短暂显示后切回 tool 状态，继续等待
+      setTimeout(() => {
+        if (isRunning.value) {
+          currentAction.value = 'tool'
+          scheduleToolTimeout()
+        }
+      }, 1500)
+    } else {
+      // 重试 3 次全部失败，放弃该工具，尝试从详情接口拉取
+      thinkingPreview.value = '工具调用失败（已重试 3 次），继续处理...'
+      currentAction.value = 'timeout'
+      clearRunTimeout()
+      // 尝试从详情接口兜底
+      setTimeout(() => {
+        if (isRunning.value) {
+          tryFetchRunDetail()
+        }
+      }, 2000)
+    }
+  }, TOOL_TIMEOUT_MS)
+}
+
+// 超时兜底：从详情接口拉取最终结果
+async function tryFetchRunDetail() {
+  if (!runCode.value || !isRunning.value) return
+  try {
+    const res = await getRunDetail(runCode.value)
+    const detail = res?.data || res
+    const replyText = detail?.reply || ''
+    const reasoningText = detail?.reasoning || ''
+    
+    if (replyText || reasoningText) {
+      const finalParsed = parseThink(replyText || reasoningText)
+      const answer = finalParsed.answer || replyText || ''
+      const reasoning = reasoningText || finalParsed.reasoning || ''
+      updateAssistantMessage(assistantMsgId, {
+        content: answer || reasoning,
+        reasoning: reasoning || undefined,
+        status: answer ? 'complete' : 'running',
+      })
+      if (answer) {
+        isRunning.value = false
+        currentAction.value = 'waiting'
+        runFinishedAt.value = Date.now()
+        clearRunTimeout()
+        if (eventSource) {
+          eventSource.close()
+          eventSource = null
+        }
+      } else {
+        // 有思考但无最终答案，继续等
+        scheduleThinkingTimeout()
+      }
+    } else {
+      // 详情也没结果，继续轮询一次
+      scheduleThinkingTimeout()
+    }
+  } catch {
+    // 详情接口失败，继续等
+    scheduleThinkingTimeout()
   }
 }
 
@@ -1365,6 +1547,13 @@ onBeforeUnmount(() => {
                       <div class="status-preview tool-name">{{ currentToolName }}</div>
                     </div>
                   </template>
+                  <template v-else-if="currentAction === 'timeout'">
+                    <div class="status-icon timeout"><el-icon><Warning /></el-icon></div>
+                    <div class="status-text">
+                      <span class="status-label">处理中</span>
+                      <div v-if="thinkingPreview" class="status-preview">{{ thinkingPreview }}</div>
+                    </div>
+                  </template>
                   <template v-else>
                     <div class="status-icon waiting"><el-icon><MagicStick /></el-icon></div>
                     <div class="status-text">
@@ -1372,7 +1561,7 @@ onBeforeUnmount(() => {
                     </div>
                   </template>
                 </div>
-                <span v-if="msg.status === 'running' && !currentAction" class="typing-dot"></span>
+                <span v-if="msg.status === 'running' && currentAction === 'waiting'" class="typing-dot"></span>
               </div>
             </div>
           </div>
@@ -1423,6 +1612,18 @@ onBeforeUnmount(() => {
       <!-- Trace View -->
       <template v-else>
         <div class="pg-trace-view">
+          <!-- Run 选择器 -->
+          <div v-if="runCodeList.length > 0" class="trace-run-selector">
+            <span class="trace-run-label">Run:</span>
+            <el-select v-model="activeTraceRunCode" size="small" class="trace-run-select">
+              <el-option
+                v-for="rc in runCodeList"
+                :key="rc"
+                :label="rc.slice(0, 20)"
+                :value="rc"
+              />
+            </el-select>
+          </div>
           <!-- Trace Stats Bar -->
           <div class="trace-stats-bar">
             <div class="trace-stat">
@@ -1512,7 +1713,7 @@ onBeforeUnmount(() => {
                     <div class="trace-entry-content">
                       <!-- Tool call with result -->
                       <template v-if="entry.type === 'tool_call' && entry.toolResult">
-                        <div v-if="!entry.expanded" @click.stop="entry.expanded = true" class="trace-entry-preview">
+                        <div v-if="!isEntryExpanded(entry.id)" @click.stop="toggleEntryExpand(entry.id)" class="trace-entry-preview">
                           <div class="trace-args-preview">
                             <span class="trace-preview-label">Payload</span>
                             <code>{{ truncateArgs(entry.toolArgs || '') }}</code>
@@ -1526,7 +1727,7 @@ onBeforeUnmount(() => {
                             展开查看完整内容
                           </div>
                         </div>
-                        <div v-else @click.stop="entry.expanded = false" class="trace-entry-expanded">
+                        <div v-else @click.stop="toggleEntryExpand(entry.id)" class="trace-entry-expanded">
                           <div class="trace-expand-section">
                             <div class="trace-expand-title">Payload</div>
                             <pre class="trace-expand-pre">{{ entry.toolArgs || '{}' }}</pre>
@@ -1543,14 +1744,14 @@ onBeforeUnmount(() => {
                       </template>
                       <!-- Tool call without result -->
                       <template v-else-if="entry.type === 'tool_call'">
-                        <div v-if="!entry.expanded" @click.stop="entry.expanded = true" class="trace-entry-preview">
+                        <div v-if="!isEntryExpanded(entry.id)" @click.stop="toggleEntryExpand(entry.id)" class="trace-entry-preview">
                           <code>{{ truncateArgs(entry.toolArgs || '') }}</code>
                           <div class="trace-expand-hint">
                             <el-icon><CaretBottom /></el-icon>
                             展开查看完整内容
                           </div>
                         </div>
-                        <div v-else @click.stop="entry.expanded = false" class="trace-entry-expanded">
+                        <div v-else @click.stop="toggleEntryExpand(entry.id)" class="trace-entry-expanded">
                           <pre class="trace-expand-pre">{{ entry.toolArgs || '{}' }}</pre>
                           <div class="trace-collapse-hint">
                             <el-icon><CaretRight /></el-icon>
@@ -1560,14 +1761,14 @@ onBeforeUnmount(() => {
                       </template>
                       <!-- Other entries -->
                       <template v-else>
-                        <div v-if="isLongContent(entry) && !entry.expanded" @click.stop="entry.expanded = true" class="trace-entry-preview">
+                        <div v-if="isLongContent(entry) && !isEntryExpanded(entry.id)" @click.stop="toggleEntryExpand(entry.id)" class="trace-entry-preview">
                           <span>{{ entry.content.slice(0, 150) }}…</span>
                           <div class="trace-expand-hint">
                             <el-icon><CaretBottom /></el-icon>
                             展开查看完整内容
                           </div>
                         </div>
-                        <div v-else-if="entry.expanded" @click.stop="entry.expanded = false">
+                        <div v-else-if="isEntryExpanded(entry.id)" @click.stop="toggleEntryExpand(entry.id)">
                           <pre class="trace-entry-pre">{{ entry.content }}</pre>
                           <div class="trace-collapse-hint">
                             <el-icon><CaretRight /></el-icon>
@@ -2144,6 +2345,12 @@ onBeforeUnmount(() => {
 .status-icon.tool {
   background: rgba(245, 158, 11, 0.12);
   color: #f59e0b;
+}
+
+.status-icon.timeout {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  animation: status-pulse 1.5s ease-in-out infinite;
 }
 
 .status-icon.waiting {
@@ -2841,6 +3048,22 @@ onBeforeUnmount(() => {
 }
 
 /* ===== Trace View ===== */
+.trace-run-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--c-border-subtle);
+  background: var(--c-bg-soft);
+}
+.trace-run-label {
+  font-size: 12px;
+  color: var(--c-text-secondary);
+}
+.trace-run-select {
+  flex: 1;
+  max-width: 240px;
+}
 .pg-trace-view {
   display: flex;
   flex-direction: column;

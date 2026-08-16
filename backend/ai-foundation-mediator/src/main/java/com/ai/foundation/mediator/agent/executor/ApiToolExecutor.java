@@ -26,6 +26,8 @@ import java.util.Map;
 public class ApiToolExecutor {
 
     private static final Duration DEFAULT_TIMEOUT = Duration.ofSeconds(30);
+    private static final String DEFAULT_USER_AGENT =
+            "Mozilla/5.0 (compatible; AI-Foundation/1.0; +https://ai-foundation.local)";
 
     private final WebClient.Builder webClientBuilder;
     private final ObjectMapper objectMapper;
@@ -38,6 +40,7 @@ public class ApiToolExecutor {
         String method = StringUtils.defaultIfBlank(tool.getMethod(), "GET").trim().toUpperCase();
         String baseUrl = resolveBaseUrl(tool.getSchemaCode());
         String fullUrl = buildFullUrl(baseUrl, tool.getUrl());
+        boolean isInternal = isInternalUrl(fullUrl);
 
         Map<String, Object> requestParams = new HashMap<>(sanitizeParams(params));
         // 解析 URL 路径占位符（如 {from}/{to}/{amount}）
@@ -46,7 +49,7 @@ public class ApiToolExecutor {
             removePathParams(fullUrl, requestParams);
         }
         fullUrl = resolvedUrl;
-        Map<String, String> headers = buildHeaders(accessToken, requestParams);
+        Map<String, String> headers = buildHeaders(accessToken, requestParams, isInternal);
 
         log.info("ApiToolExecutor request, toolId={}, method={}, url={}", tool.getId(), method, fullUrl);
         log.debug("ApiToolExecutor params: {}", requestParams.keySet());
@@ -146,14 +149,29 @@ public class ApiToolExecutor {
         return toolUrl;
     }
 
-    private Map<String, String> buildHeaders(String accessToken, Map<String, Object> params) {
+    /**
+     * 判断是否为内部 API（非 http(s) 绝对 URL 的视为内部）
+     */
+    private boolean isInternalUrl(String fullUrl) {
+        return StringUtils.isNotBlank(fullUrl)
+                && !fullUrl.startsWith("http://")
+                && !fullUrl.startsWith("https://");
+    }
+
+    private Map<String, String> buildHeaders(String accessToken, Map<String, Object> params,
+                                              boolean isInternal) {
         Map<String, String> headers = new HashMap<>();
-        if (StringUtils.isNotBlank(accessToken)) {
-            headers.put("x-access-titc-c-token", accessToken);
-        }
-        Object hotelCode = params.get("hotelCode");
-        if (hotelCode != null && StringUtils.isNotBlank(String.valueOf(hotelCode))) {
-            headers.put("x-hotel-code", String.valueOf(hotelCode));
+        headers.put(HttpHeaders.USER_AGENT, DEFAULT_USER_AGENT);
+        headers.put(HttpHeaders.ACCEPT, "application/json, */*;q=0.8");
+
+        if (isInternal) {
+            if (StringUtils.isNotBlank(accessToken)) {
+                headers.put("x-access-titc-c-token", accessToken);
+            }
+            Object hotelCode = params.get("hotelCode");
+            if (hotelCode != null && StringUtils.isNotBlank(String.valueOf(hotelCode))) {
+                headers.put("x-hotel-code", String.valueOf(hotelCode));
+            }
         }
         return headers;
     }

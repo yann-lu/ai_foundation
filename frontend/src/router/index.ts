@@ -30,6 +30,18 @@ const routes = [
         meta: { title: 'CLI 能力管理' }
       },
       {
+        path: 'mcp',
+        name: 'Mcp',
+        component: () => import('@/views/McpServerList.vue'),
+        meta: { title: 'MCP 服务器' }
+      },
+      {
+        path: 'skill',
+        name: 'Skill',
+        component: () => import('@/views/SkillList.vue'),
+        meta: { title: '技能管理' }
+      },
+      {
         path: 'model',
         name: 'Model',
         component: () => import('@/views/ModelConfigList.vue'),

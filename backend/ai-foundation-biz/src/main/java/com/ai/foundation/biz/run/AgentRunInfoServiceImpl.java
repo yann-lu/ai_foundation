@@ -31,4 +31,18 @@ public class AgentRunInfoServiceImpl extends ServiceImpl<AgentRunInfoMapper, Age
                 .orderByDesc(AgentRunInfo::getId)
                 .last("limit 1"));
     }
+
+    @Override
+    public com.baomidou.mybatisplus.core.metadata.IPage<AgentRunInfo> pageByConversationId(
+            Long conversationId, long current, long size) {
+        if (conversationId == null) {
+            return new com.baomidou.mybatisplus.extension.plugins.pagination.Page<>(current, size);
+        }
+        com.baomidou.mybatisplus.extension.plugins.pagination.Page<AgentRunInfo> page =
+                new com.baomidou.mybatisplus.extension.plugins.pagination.Page<>(current, size);
+        return this.page(page, new LambdaQueryWrapper<AgentRunInfo>()
+                .eq(AgentRunInfo::getConversationId, conversationId)
+                .eq(AgentRunInfo::getState, 1)
+                .orderByDesc(AgentRunInfo::getId));
+    }
 }

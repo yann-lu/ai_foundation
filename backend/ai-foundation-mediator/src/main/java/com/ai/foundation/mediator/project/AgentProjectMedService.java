@@ -12,11 +12,15 @@ import com.ai.foundation.dal.entity.AgentCliCommand;
 import com.ai.foundation.dal.entity.AgentProject;
 import com.ai.foundation.facade.dto.cli.BindCapabilityOptionDTO;
 import com.ai.foundation.facade.dto.cli.BindOptionsResponse;
+import com.ai.foundation.facade.dto.skill.SkillBindOptionDTO;
 import com.ai.foundation.facade.dto.project.AgentProjectDTO;
 import com.ai.foundation.facade.dto.project.AgentProjectPageRequest;
 import com.ai.foundation.facade.dto.project.AgentProjectSaveRequest;
 import com.ai.foundation.mediator.prompt.ProjectPromptService;
 import com.ai.foundation.mediator.store.CapabilityCatalogCache;
+import com.ai.foundation.biz.skill.AgentProjectSkillRelService;
+import com.ai.foundation.biz.skill.AgentSkillDefinitionService;
+import com.ai.foundation.dal.entity.AgentSkillDefinition;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
 import lombok.RequiredArgsConstructor;
@@ -42,6 +46,8 @@ public class AgentProjectMedService {
     private final AgentCliCommandService cliCommandService;
     private final AgentProjectCliMappingService projectCliMappingService;
     private final CapabilityCatalogCache capabilityCatalogCache;
+    private final AgentSkillDefinitionService skillDefinitionService;
+    private final AgentProjectSkillRelService projectSkillRelService;
 
     public PageResult<AgentProjectDTO> page(AgentProjectPageRequest request) {
         Page<AgentProject> page = new Page<>(request.getCurrent(), request.getSize());
@@ -136,10 +142,20 @@ public class AgentProjectMedService {
         if (project == null) {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "项目不存在");
         }
-        projectCliMappingService.removeByProjectId(projectId);
-        if (cliIds != null && !cliIds.isEmpty()) {
+        Set<Long> newCliIds = cliIds == null ? new HashSet<>() : new HashSet<>(cliIds);
+        Set<Long> existingCliIds = new HashSet<>(projectCliMappingService.listCliIdsByProjectId(projectId));
+
+        Set<Long> toRemove = new HashSet<>(existingCliIds);
+        toRemove.removeAll(newCliIds);
+        if (!toRemove.isEmpty()) {
+            projectCliMappingService.removeByProjectIdAndCliIds(projectId, new ArrayList<>(toRemove));
+        }
+
+        Set<Long> toAdd = new HashSet<>(newCliIds);
+        toAdd.removeAll(existingCliIds);
+        if (!toAdd.isEmpty()) {
             List<com.ai.foundation.dal.entity.AgentProjectCliMapping> mappings = new ArrayList<>();
-            for (Long cliId : cliIds) {
+            for (Long cliId : toAdd) {
                 com.ai.foundation.dal.entity.AgentProjectCliMapping mapping =
                         new com.ai.foundation.dal.entity.AgentProjectCliMapping();
                 mapping.setProjectId(projectId);
@@ -152,6 +168,30 @@ public class AgentProjectMedService {
             projectCliMappingService.saveBatch(mappings);
         }
         capabilityCatalogCache.invalidate(project.getProjectCode());
-        log.info("项目挂载能力更新 projectId={} cliCount={}", projectId, cliIds == null ? 0 : cliIds.size());
+        log.info("项目挂载能力更新 projectId={} add={} remove={}", projectId, toAdd.size(), toRemove.size());
     }
+
+    public List<SkillBindOptionDTO> listSkillBindOptions(Long projectId) {
+        AgentProject project = projectService.getById(projectId);
+        if (project == null) {
+            throw new BusinessException(ResultCode.DATA_NOT_FOUND, "项目不存在");
+        }
+        List<AgentSkillDefinition> allSkills = skillDefinitionService.lambdaQuery()
+                .eq(AgentSkillDefinition::getState, CommonConstants.STATE_ENABLED)
+                .orderByAsc(AgentSkillDefinition::getSkillName)
+                .list();
+        Set<Long> boundIds = new HashSet<>(projectSkillRelService.listSkillIdsByProjectId(projectId));
+        return allSkills.stream()
+                .map(skill -> {
+                    SkillBindOptionDTO dto = new SkillBindOptionDTO();
+                    dto.setId(skill.getId());
+                    dto.setSkillName(skill.getSkillName());
+                    dto.setSkillType(skill.getSkillType());
+                    dto.setDescription(skill.getDescription());
+                    dto.setBound(boundIds.contains(skill.getId()));
+                    return dto;
+                })
+                .toList();
+    }
+
 }

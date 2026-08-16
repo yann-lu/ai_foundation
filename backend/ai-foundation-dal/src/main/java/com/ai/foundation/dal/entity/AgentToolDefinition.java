@@ -19,7 +19,11 @@ public class AgentToolDefinition {
 
     private Long cliId;
 
+    private Long mcpServerId;
+
     private String toolName;
+
+    private String mcpToolName;
 
     private String description;
 

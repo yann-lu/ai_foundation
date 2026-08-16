@@ -4,6 +4,8 @@ import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'elem
 import { Plus, Search, Refresh, Delete, Edit, Document } from '@element-plus/icons-vue'
 import { pageProjects, createProject, updateProject, deleteProject } from '@/api/project'
 import BindCapabilityDialog from '@/components/BindCapabilityDialog.vue'
+import BindSkillDialog from '@/components/BindSkillDialog.vue'
+import { MagicStick } from '@element-plus/icons-vue'
 import { Setting } from '@element-plus/icons-vue'
 import type { AgentProjectDTO } from '@/types/api'
 
@@ -26,6 +28,7 @@ const dialogTitle = ref('')
 const submitLoading = ref(false)
 const formRef = ref<FormInstance>()
 const bindDialogVisible = ref(false)
+const skillBindDialogVisible = ref(false)
 const currentProjectId = ref<number>(0)
 const currentProjectName = ref('')
 const form = reactive<AgentProjectDTO>({
@@ -136,6 +139,16 @@ function handleBindSuccess() {
   loadData()
 }
 
+function openSkillBindDialog(row: AgentProjectDTO) {
+  currentProjectId.value = row.id!
+  currentProjectName.value = row.projectName
+  skillBindDialogVisible.value = true
+}
+
+function handleSkillBindSuccess() {
+  loadData()
+}
+
 function handleDelete(row: AgentProjectDTO) {
   ElMessageBox.confirm(`确认删除项目「${row.projectName}」吗？`, '提示', { type: 'warning' })
     .then(async () => {
@@ -231,10 +244,11 @@ onMounted(loadData)
             <span class="time-text">{{ formatTime(row.updateTime) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right" align="center">
+        <el-table-column label="操作" width="360" fixed="right" align="center">
           <template #default="{ row }">
             <div class="action-btns">
-              <el-button type="primary" link :icon="Setting" @click="openBindDialog(row)">挂载能力</el-button>
+              <el-button type="primary" link :icon="Setting" @click="openBindDialog(row)">挂载CLI</el-button>
+              <el-button type="primary" link :icon="MagicStick" @click="openSkillBindDialog(row)">挂载技能</el-button>
               <el-button type="primary" link :icon="Edit" @click="openEdit(row)">编辑</el-button>
               <el-button type="danger" link :icon="Delete" @click="handleDelete(row)">删除</el-button>
             </div>
@@ -296,6 +310,13 @@ onMounted(loadData)
         <el-button type="primary" :loading="submitLoading" @click="handleSubmit">确定</el-button>
       </template>
     </el-dialog>
+
+    <BindSkillDialog
+      v-model:visible="skillBindDialogVisible"
+      :project-id="currentProjectId"
+      :project-name="currentProjectName"
+      @success="handleSkillBindSuccess"
+    />
 
     <BindCapabilityDialog
       v-model:visible="bindDialogVisible"

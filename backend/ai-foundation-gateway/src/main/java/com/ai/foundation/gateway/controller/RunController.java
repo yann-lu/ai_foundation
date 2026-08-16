@@ -11,10 +11,15 @@ import com.ai.foundation.facade.dto.run.RunCancelRequest;
 import com.ai.foundation.facade.dto.run.RunDetailRequest;
 import com.ai.foundation.facade.dto.run.RequestMessageDTO;
 import com.ai.foundation.facade.dto.run.RunDetailResponse;
+import com.ai.foundation.facade.dto.run.RunItemDTO;
+import com.ai.foundation.com.response.PageResult;
 import com.ai.foundation.facade.dto.run.RunTaskDTO;
+import com.ai.foundation.facade.dto.run.RunEventDTO;
 import com.ai.foundation.gateway.util.MonoUtils;
 import com.ai.foundation.mediator.conversation.AgentConversationMedService;
 import com.ai.foundation.biz.run.AgentRunTaskInfoService;
+import com.ai.foundation.biz.run.AgentRunEventLogService;
+import com.ai.foundation.dal.entity.AgentRunEventLog;
 import com.ai.foundation.mediator.run.AgentRunMedService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -48,6 +53,7 @@ public class RunController {
 
     private final AgentRunMedService runMedService;
     private final AgentRunTaskInfoService taskInfoService;
+    private final AgentRunEventLogService runEventLogService;
     private final AgentConversationMedService conversationMedService;
     private final ObjectMapper objectMapper;
 
@@ -118,6 +124,63 @@ public class RunController {
             response.setReasoning(run.getReasoning());
             response.setTasks(buildTaskDTOs(run.getId()));
             return response;
+        }).map(ApiResponse::success);
+    }
+
+    @GetMapping("/events/list")
+    public Mono<ApiResponse<java.util.List<RunEventDTO>>> listEvents(@RequestParam String runCode) {
+        return MonoUtils.fromBlocking(() -> buildEventDtos(runCode))
+                .map(ApiResponse::success);
+    }
+
+    private java.util.List<RunEventDTO> buildEventDtos(String runCode) {
+        AgentRunInfo run = runMedService.getRunDetail(runCode);
+        if (run == null) {
+            return java.util.Collections.emptyList();
+        }
+        java.util.List<AgentRunEventLog> events = runEventLogService.listByRunId(run.getId());
+        java.util.List<RunEventDTO> result = new java.util.ArrayList<>();
+        for (AgentRunEventLog event : events) {
+            RunEventDTO dto = new RunEventDTO();
+            dto.setId(event.getId());
+            dto.setRunId(event.getRunId());
+            dto.setEventType(event.getEventType());
+            dto.setTaskState(event.getTaskState());
+            dto.setEventData(event.getEventData());
+            dto.setTimestamp(event.getEventTimestamp());
+            result.add(dto);
+        }
+        return result;
+    }
+
+    @GetMapping("/page")
+    public Mono<ApiResponse<PageResult<RunItemDTO>>> pageRuns(
+            @RequestParam String conversationCode,
+            @RequestParam(defaultValue = "1") long current,
+            @RequestParam(defaultValue = "20") long size) {
+        return MonoUtils.fromBlocking(() -> {
+            AgentConversationInfo conversation = conversationMedService.getByCode(conversationCode);
+            if (conversation == null) {
+                return new PageResult<RunItemDTO>(java.util.Collections.emptyList(), 0, current, size);
+            }
+            com.baomidou.mybatisplus.core.metadata.IPage<AgentRunInfo> page =
+                    runMedService.pageRuns(conversation.getId(), current, size);
+            java.util.List<RunItemDTO> records = page.getRecords().stream()
+                    .map(run -> {
+                        RunItemDTO dto = new RunItemDTO();
+                        dto.setId(run.getId());
+                        dto.setRunCode(run.getRunCode());
+                        dto.setRunType(run.getRunType());
+                        dto.setTaskState(run.getTaskState());
+                        dto.setTokensPrompt(run.getTokensPrompt());
+                        dto.setTokensCompletion(run.getTokensCompletion());
+                        dto.setCost(run.getCost());
+                        dto.setCreateTime(run.getCreateTime());
+                        dto.setUpdateTime(run.getUpdateTime());
+                        return dto;
+                    })
+                    .toList();
+            return new PageResult<>(records, page.getTotal(), page.getCurrent(), page.getSize());
         }).map(ApiResponse::success);
     }
 

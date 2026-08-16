@@ -90,6 +90,9 @@ ai-foundation-parent (pom)
 - 轨迹视图（Trace View）：独立的全流程时间线视图，按时间顺序展示 SYSTEM、USER、CONTEXT、THINKING、ASSISTANT、TOOL 等全部事件；顶部展示 Duration、Turns、Calls 统计与三段式时间条（Input / Model / Tools）；点击工具调用可在右侧详情面板查看 Summary、Payload、Result、Timing 四个维度的信息；支持关键词搜索过滤。
 - 思考链路：后端优先推送模型返回的 `reasoning_content` 为 `chat_reasoning` 事件；如模型仅在正文中输出 `<think>...</think>`，前端会解析该片段并在消息折叠区与右侧 Inspector 中展示。
 - 工具调用追踪：ReAct 模式下 `tool_call` / `tool_result` 事件自动配对，工具卡片内联展示参数与结果预览，展开可查看完整 Payload 与返回值，详情面板展示执行耗时等时序信息。
+- 运行状态指示器：对话气泡中实时显示 AI 当前状态——「准备中」「正在思考」（带思考内容预览）「正在调用工具 xxx」「处理中（超时/重试）」，避免用户误以为页面卡死。
+- 前端超时兜底：思考阶段 60s 无新内容、工具调用 30s 无返回时自动触发，尝试从详情接口 `getRunDetail` 拉取最终结果；SSE 连接断开时同样走该兜底逻辑。
+- 后端工具超时与重试：`ReactCliToolInvoker` 对每次工具调用设置 30s 超时，最多重试 3 次（间隔递增），全部失败后返回错误描述字符串而非抛出异常，确保 Agent 流程不会因单个工具故障而卡死。
 
 | 方法 | 路径 | 说明 | 鉴权 |
 | --- | --- | --- | --- |

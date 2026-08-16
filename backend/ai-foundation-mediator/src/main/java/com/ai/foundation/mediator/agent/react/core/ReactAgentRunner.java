@@ -2,6 +2,10 @@ package com.ai.foundation.mediator.agent.react.core;
 
 import com.ai.foundation.biz.cli.AgentCliCommandService;
 import com.ai.foundation.biz.cli.AgentProjectCliMappingService;
+import com.ai.foundation.biz.skill.AgentProjectSkillRelService;
+import com.ai.foundation.biz.skill.AgentSkillDefinitionService;
+import com.ai.foundation.biz.skill.AgentSkillResourceService;
+import com.ai.foundation.dal.entity.AgentSkillDefinition;
 import com.ai.foundation.biz.project.AgentProjectService;
 import com.ai.foundation.biz.run.AgentRunInfoService;
 import com.ai.foundation.com.constant.RunTypeConstant;
@@ -65,6 +69,9 @@ public class ReactAgentRunner {
     private final AgentProjectCliMappingService projectCliMappingService;
     private final AgentProjectService projectService;
     private final AgentRunInfoService runInfoService;
+    private final AgentProjectSkillRelService projectSkillRelService;
+    private final AgentSkillDefinitionService skillDefinitionService;
+    private final AgentSkillResourceService skillResourceService;
 
     public Flux<RunStreamEnvelope> streamReactRun(AgentRunInfo run, AgentConversationInfo conversation,
                                                    String userMessage, String systemPrompt,
@@ -171,6 +178,19 @@ public class ReactAgentRunner {
             }
         }
 
+        // 技能提示词（按顺序追加在项目提示词之后）
+        if (projectId != null) {
+            List<AgentSkillDefinition> skills = loadProjectSkills(projectId);
+            if (skills != null && !skills.isEmpty()) {
+                for (AgentSkillDefinition skill : skills) {
+                    if (StringUtils.isNotBlank(skill.getSystemPrompt())) {
+                        sb.append("【技能：").append(skill.getSkillName()).append("】\n");
+                        sb.append(skill.getSystemPrompt().trim()).append("\n\n");
+                    }
+                }
+            }
+        }
+
         // ReAct 工作方式说明（工具调用规则）
         sb.append(DEFAULT_REACT_SYSTEM_PROMPT);
 
@@ -187,20 +207,55 @@ public class ReactAgentRunner {
         return sb.toString();
     }
 
+    private List<AgentSkillDefinition> loadProjectSkills(Long projectId) {
+        if (projectId == null) {
+            return List.of();
+        }
+        try {
+            List<Long> skillIds = projectSkillRelService.listSkillIdsByProjectId(projectId);
+            if (skillIds == null || skillIds.isEmpty()) {
+                return List.of();
+            }
+            return skillDefinitionService.lambdaQuery()
+                    .in(AgentSkillDefinition::getId, skillIds)
+                    .eq(AgentSkillDefinition::getState, 1)
+                    .list();
+        } catch (Exception ex) {
+            log.warn("加载项目技能列表失败, projectId={}", projectId, ex);
+            return List.of();
+        }
+    }
+
     private List<AgentCliCommand> loadProjectCliCommands(Long projectId) {
         if (projectId == null) {
             return List.of();
         }
         try {
-            List<Long> cliIds = projectCliMappingService.listCliIdsByProjectId(projectId);
-            if (cliIds == null || cliIds.isEmpty()) {
+            java.util.Set<Long> allCliIds = new java.util.HashSet<>(projectCliMappingService.listCliIdsByProjectId(projectId));
+
+            List<Long> skillIds = projectSkillRelService.listSkillIdsByProjectId(projectId);
+            if (skillIds != null && !skillIds.isEmpty()) {
+                for (Long skillId : skillIds) {
+                    List<Long> skillCliIds = skillResourceService.listResourceIdsBySkillIdAndType(skillId, "CLI");
+                    if (skillCliIds != null) {
+                        allCliIds.addAll(skillCliIds);
+                    }
+                }
+            }
+
+            if (allCliIds.isEmpty()) {
+                log.info("loadProjectCliCommands empty, projectId={}", projectId);
                 return List.of();
             }
-            return cliCommandService.lambdaQuery()
-                    .in(AgentCliCommand::getId, cliIds)
+            List<AgentCliCommand> result = cliCommandService.lambdaQuery()
+                    .in(AgentCliCommand::getId, allCliIds)
                     .eq(AgentCliCommand::getState, 1)
-                    .eq(AgentCliCommand::getCommandType, "API")
+                    .in(AgentCliCommand::getCommandType, "API", "MCP")
                     .list();
+            log.info("loadProjectCliCommands projectId={} total={} loaded={} names={}",
+                    projectId, allCliIds.size(), result.size(),
+                    result.stream().map(AgentCliCommand::getCommandName).toList());
+            return result;
         } catch (Exception ex) {
             log.warn("加载项目 CLI 列表失败, projectId={}", projectId, ex);
             return List.of();

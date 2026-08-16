@@ -38,6 +38,16 @@ export function getRunDetail(runCode: string): Promise<{ data: any }> {
   return request.post<any, { data: any }>('/chat/runs/detail', { runCode })
 }
 
+export function pageRuns(conversationCode: string, current = 1, size = 20): Promise<{ data: any }> {
+  return request.get<any, { data: any }>(`/chat/runs/page`, {
+    params: { conversationCode, current, size }
+  })
+}
+
+export function listRunEvents(runCode: string): Promise<{ data: any[] }> {
+  return request.get<any[], { data: any[] }>(`/chat/runs/events/list?runCode=${encodeURIComponent(runCode)}`)
+}
+
 export function cancelRun(runCode: string, operator?: string): Promise<{ data: boolean }> {
   return request.post<boolean, { data: boolean }>('/chat/runs/cancel', { runCode, operator })
 }

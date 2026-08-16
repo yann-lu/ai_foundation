@@ -7,6 +7,7 @@ import com.ai.foundation.biz.cli.AgentPageDefinitionService;
 import com.ai.foundation.biz.cli.AgentProjectCliMappingService;
 import com.ai.foundation.biz.cli.AgentToolDefinitionService;
 import com.ai.foundation.biz.converter.CliConverter;
+import com.ai.foundation.biz.skill.AgentSkillResourceService;
 import com.ai.foundation.com.constant.CommonConstants;
 import com.ai.foundation.com.exception.BusinessException;
 import com.ai.foundation.com.response.PageResult;
@@ -40,6 +41,7 @@ public class AgentCliMedService {
     private final AgentPageDefinitionService pageDefinitionService;
     private final AgentCliRecallTagService recallTagService;
     private final AgentProjectCliMappingService projectCliMappingService;
+    private final AgentSkillResourceService skillResourceService;
     private final CliConverter converter;
 
     public PageResult<CliCommandDTO> page(CliCommandPageRequest request) {
@@ -118,6 +120,12 @@ public class AgentCliMedService {
         if (existing == null) {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "CLI 命令不存在");
         }
+        // 保护：被 Skill 引用的 CLI 不允许直接删除
+        long skillRefCount = skillResourceService.countByResourceTypeAndResourceId("CLI", id);
+        if (skillRefCount > 0) {
+            throw new BusinessException(ResultCode.STATE_INVALID,
+                    "该 CLI 已被 " + skillRefCount + " 个技能引用，请先在技能中移除后再删除");
+        }
         cliCommandService.removeById(id);
         removeRelated(id);
         projectCliMappingService.removeByCliId(id);
@@ -126,8 +134,8 @@ public class AgentCliMedService {
 
     private void validate(CliCommandSaveRequest request) {
         String commandType = request.getCommandType();
-        if (!"API".equals(commandType) && !"PAGE".equals(commandType)) {
-            throw new BusinessException(ResultCode.PARAM_INVALID, "命令类型必须为 API 或 PAGE");
+        if (!"API".equals(commandType) && !"PAGE".equals(commandType) && !"MCP".equals(commandType)) {
+            throw new BusinessException(ResultCode.PARAM_INVALID, "命令类型必须为 API / PAGE / MCP");
         }
         if ("API".equals(commandType)) {
             if (request.getTool() == null || request.getTool().getUrl() == null || request.getTool().getUrl().isBlank()) {
@@ -159,6 +167,7 @@ public class AgentCliMedService {
             int sortOrder = 0;
             for (AgentCliParam param : params) {
                 param.setCliId(cliId);
+                param.setId(null);
                 if (param.getSortOrder() == null) {
                     param.setSortOrder(sortOrder++);
                 }
@@ -168,11 +177,13 @@ public class AgentCliMedService {
         if ("API".equals(request.getCommandType()) && request.getTool() != null) {
             AgentToolDefinition tool = converter.toToolEntity(request.getTool());
             tool.setCliId(cliId);
+            tool.setId(null);
             toolDefinitionService.save(tool);
         }
         if ("PAGE".equals(request.getCommandType()) && request.getPage() != null) {
             AgentPageDefinition page = converter.toPageEntity(request.getPage());
             page.setCliId(cliId);
+            page.setId(null);
             pageDefinitionService.save(page);
         }
         if (request.getRecallTags() != null && !request.getRecallTags().isEmpty()) {
@@ -180,6 +191,7 @@ public class AgentCliMedService {
             int sortOrder = 0;
             for (AgentCliRecallTag tag : tags) {
                 tag.setCliId(cliId);
+                tag.setId(null);
                 if (tag.getState() == null) {
                     tag.setState(CommonConstants.STATE_ENABLED);
                 }

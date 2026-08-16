@@ -143,7 +143,20 @@ public class ReactStreamHandler {
     }
 
     public String getFinalReply() {
-        return StringUtils.defaultIfBlank(finalReply, contentBuilder.toString()).trim();
+        // 1. 优先使用 AGENT_MODEL_FINISHED 时从 AssistantMessage.getText() 拿到的正式答复
+        if (StringUtils.isNotBlank(finalReply)) {
+            return finalReply.trim();
+        }
+        // 2. 其次使用流式阶段累计的正文（模型调过工具之后，最后一段答复会进 contentBuilder）
+        if (contentBuilder.length() > 0) {
+            return contentBuilder.toString().trim();
+        }
+        // 3. 兜底：模型没有调任何工具时，所有文本会被误判到 reasoningBuilder，
+        //    此时 reasoning 就是真正的答复
+        if (reasoningBuilder.length() > 0) {
+            return reasoningBuilder.toString().trim();
+        }
+        return "";
     }
 
     public String getReasoning() {

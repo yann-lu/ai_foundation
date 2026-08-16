@@ -22,4 +22,13 @@ public class AgentToolDefinitionServiceImpl extends ServiceImpl<AgentToolDefinit
         this.remove(new LambdaQueryWrapper<AgentToolDefinition>()
                 .eq(AgentToolDefinition::getCliId, cliId));
     }
+
+    @Override
+    public long countByMcpServerId(Long mcpServerId) {
+        if (mcpServerId == null || mcpServerId <= 0) {
+            return 0;
+        }
+        return this.count(new LambdaQueryWrapper<AgentToolDefinition>()
+                .eq(AgentToolDefinition::getMcpServerId, mcpServerId));
+    }
 }

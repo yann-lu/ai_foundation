@@ -3,8 +3,8 @@ import { computed, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useAuthStore } from '@/store/auth'
 import {
-  Folder, Setting, ChatDotRound, Cpu, Fold, Expand, Tools,
-  ArrowDown, Sunny, Moon
+  Folder, Setting, ChatDotRound, Cpu, Fold, Expand, Tools, MagicStick,
+  ArrowDown, Sunny, Moon, Connection
 } from '@element-plus/icons-vue'
 
 const route = useRoute()
@@ -22,6 +22,8 @@ const menus = [
   { index: '/project', title: '项目配置', icon: Folder, desc: '管理 Agent 项目' },
   { index: '/api-schema', title: '网关服务', icon: Setting, desc: 'API网关服务配置' },
   { index: '/cli', title: 'CLI 能力', icon: Tools, desc: 'CLI 命令管理' },
+  { index: '/mcp', title: 'MCP 服务器', icon: Connection, desc: 'MCP Server 实例管理' },
+  { index: '/skill', title: '技能管理', icon: MagicStick, desc: 'Agent 技能管理' },
   { index: '/model', title: '模型配置', icon: Setting, desc: '配置模型接入' },
   { index: '/conversation', title: '会话管理', icon: ChatDotRound, desc: '查看与会话操作' },
   { index: '/playground', title: 'Playground', icon: Cpu, desc: '实时调试 Agent' }

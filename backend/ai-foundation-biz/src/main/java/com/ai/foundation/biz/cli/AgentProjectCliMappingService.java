@@ -15,6 +15,8 @@ public interface AgentProjectCliMappingService extends IService<AgentProjectCliM
 
     void removeByCliId(Long cliId);
 
+    void removeByProjectIdAndCliIds(Long projectId, List<Long> cliIds);
+
     int countByCliId(Long cliId);
 
     List<Long> listProjectIdsByCliId(Long cliId);

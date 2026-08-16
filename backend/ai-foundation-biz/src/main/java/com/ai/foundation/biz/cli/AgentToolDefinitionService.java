@@ -8,4 +8,6 @@ public interface AgentToolDefinitionService extends IService<AgentToolDefinition
     AgentToolDefinition getByCliId(Long cliId);
 
     void removeByCliId(Long cliId);
+
+    long countByMcpServerId(Long mcpServerId);
 }

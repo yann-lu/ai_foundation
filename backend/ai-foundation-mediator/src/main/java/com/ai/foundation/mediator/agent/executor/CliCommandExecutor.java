@@ -26,6 +26,7 @@ public class CliCommandExecutor {
     private final AgentToolDefinitionService toolDefinitionService;
     private final CliParamBinder cliParamBinder;
     private final ApiToolExecutor apiToolExecutor;
+    private final McpToolExecutor mcpToolExecutor;
 
     public String executeApi(Long cliId, CliParamBindContext bindContext, String accessToken,
                              com.ai.foundation.mediator.agent.context.AgentExecutionContext context,
@@ -56,6 +57,37 @@ public class CliCommandExecutor {
             return result;
         } catch (Exception ex) {
             log.error("CliCommandExecutor api failed, cliId={}, commandName={}",
+                    cliId, cli.getCommandName(), ex);
+            throw ex;
+        }
+    }
+
+    public String executeMcp(Long cliId, CliParamBindContext bindContext, String modelName) {
+        AgentCliCommand cli = requireCli(cliId);
+        if (!CliCommandTypeConstant.MCP.equals(cli.getCommandType())) {
+            throw new BusinessException(ResultCode.PARAM_INVALID,
+                    "CLI 类型不匹配 MCP: " + cli.getCommandName());
+        }
+        AgentToolDefinition tool = toolDefinitionService.getByCliId(cliId);
+        if (tool == null) {
+            throw new BusinessException(ResultCode.PARAM_INVALID,
+                    "CLI 未配置 Tool: cliId=" + cliId);
+        }
+        List<AgentCliParam> params = cliParamService.listByCliId(cliId);
+        if (bindContext != null) {
+            bindContext.setCliCommandName(cli.getCommandName());
+        }
+        Map<String, Object> boundParams = cliParamBinder.bind(bindContext, params, modelName);
+        log.info("CliCommandExecutor mcp, cliId={}, commandName={}, mcpTool={}, paramKeys={}",
+                cliId, cli.getCommandName(), tool.getMcpToolName(), boundParams.keySet());
+
+        long startMs = System.currentTimeMillis();
+        try {
+            String result = mcpToolExecutor.execute(tool, boundParams);
+            log.info("CliCommandExecutor mcp completed, cliId={}, cost={}ms", cliId, System.currentTimeMillis() - startMs);
+            return result;
+        } catch (Exception ex) {
+            log.error("CliCommandExecutor mcp failed, cliId={}, commandName={}",
                     cliId, cli.getCommandName(), ex);
             throw ex;
         }

@@ -39,6 +39,8 @@ public class AgentRunMedService {
     private final AgentOrchestrator orchestrator;
     private final ReactAgentRunner reactAgentRunner;
     private final AgentConversationService conversationService;
+    private final com.ai.foundation.biz.run.AgentRunEventLogService runEventLogService;
+    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
 
     /** 待执行 Run 参数，createRun 时存入，streamRunEvents 订阅时取出启动。 */
     private final ConcurrentMap<String, PendingRun> pendingRuns = new ConcurrentHashMap<>();
@@ -133,10 +135,40 @@ public class AgentRunMedService {
                 .takeUntil(e -> isTerminal(e.getEventType()))
                 .concatWith(Mono.fromCallable(() -> envelopeRunComplete(
                         trimmedRunCode, pending.conversation().getConversationCode()))
-                        .subscribeOn(Schedulers.boundedElastic()));
+                        .subscribeOn(Schedulers.boundedElastic()))
+                .doOnNext(env -> persistEventAsync(pending.run(), pending.conversation(), env));
             })
             .takeUntil(e -> isTerminal(e.getEventType()))
             .doFinally(signal -> cancelSignals.remove(trimmedRunCode));
+    }
+
+    private void persistEventAsync(AgentRunInfo run, AgentConversationInfo conversation, RunStreamEnvelope env) {
+        try {
+            String dataStr = null;
+            if (env.getData() != null) {
+                if (env.getData() instanceof String s) {
+                    dataStr = s;
+                } else {
+                    dataStr = objectMapper.writeValueAsString(env.getData());
+                }
+                if (dataStr != null && dataStr.length() > 65535) {
+                    dataStr = dataStr.substring(0, 65535);
+                }
+            }
+            final String finalData = dataStr;
+            Schedulers.boundedElastic().schedule(() ->
+                    runEventLogService.appendEvent(
+                            run.getId(),
+                            conversation.getId(),
+                            env.getEventType(),
+                            env.getTaskState(),
+                            finalData,
+                            env.getTimestamp()
+                    )
+            );
+        } catch (Exception ex) {
+            log.warn("持久化事件日志失败 runId={} eventType={}", run.getId(), env.getEventType(), ex);
+        }
     }
 
     /**
@@ -162,6 +194,11 @@ public class AgentRunMedService {
      * @param conversationCode 会话编码
      * @return 最近一条 Run，没有则返回 null
      */
+    public com.baomidou.mybatisplus.core.metadata.IPage<AgentRunInfo> pageRuns(
+            Long conversationId, long current, long size) {
+        return runInfoService.pageByConversationId(conversationId, current, size);
+    }
+
     public AgentRunInfo getLatestRunByConversation(String conversationCode) {
         if (StringUtils.isBlank(conversationCode)) {
             return null;
