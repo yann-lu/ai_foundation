@@ -102,6 +102,47 @@ const activeTraceRunCode = ref('')
 const runCodeList = computed(() => {
   return Array.from(runEventsMap.value.keys()).reverse()
 })
+const runList = ref<any[]>([])
+const runListPage = ref(1)
+const runListTotal = ref(0)
+const runListLoading = ref(false)
+
+async function loadRunList() {
+  if (!activeConvCode.value) return
+  runListLoading.value = true
+  try {
+    const res = await pageRuns(activeConvCode.value, runListPage.value, 50)
+    runListTotal.value = res.data?.total || 0
+    runList.value = res.data?.records || []
+    // 如果还没选中任何 run，默认选第一个
+    if (!activeTraceRunCode.value && runList.value.length > 0) {
+      const firstRun = runList.value[0]
+      await loadRunEvents(firstRun.runCode)
+    }
+  } finally {
+    runListLoading.value = false
+  }
+}
+
+async function loadRunEvents(runCode: string) {
+  if (runEventsMap.value.has(runCode)) {
+    activeTraceRunCode.value = runCode
+    return
+  }
+  try {
+    const res = await listRunEvents(runCode)
+    const eventList: RunEventLog[] = (res.data || []).map((e: any) => ({
+      eventType: e.eventType,
+      data: e.eventData,
+      taskState: e.taskState,
+      timestamp: e.timestamp,
+    }))
+    runEventsMap.value.set(runCode, eventList)
+    activeTraceRunCode.value = runCode
+  } catch {
+    // ignore
+  }
+}
 const runEvents = computed(() => {
   if (!activeTraceRunCode.value) return []
   return runEventsMap.value.get(activeTraceRunCode.value) || []
@@ -1612,18 +1653,33 @@ onBeforeUnmount(() => {
       <!-- Trace View -->
       <template v-else>
         <div class="pg-trace-view">
-          <!-- Run 选择器 -->
-          <div v-if="runCodeList.length > 0" class="trace-run-selector">
-            <span class="trace-run-label">Run:</span>
-            <el-select v-model="activeTraceRunCode" size="small" class="trace-run-select">
-              <el-option
-                v-for="rc in runCodeList"
-                :key="rc"
-                :label="rc.slice(0, 20)"
-                :value="rc"
-              />
-            </el-select>
-          </div>
+          <div class="trace-split">
+            <!-- Run 列表 -->
+            <div class="trace-run-list">
+              <div class="trace-run-list-header">运行记录</div>
+              <div v-loading="runListLoading" class="trace-run-list-body">
+                <div
+                  v-for="run in runList"
+                  :key="run.runCode"
+                  :class="['trace-run-item', { active: activeTraceRunCode === run.runCode }]"
+                  @click="loadRunEvents(run.runCode)"
+                >
+                  <div class="trace-run-item-title">
+                    <span :class="['trace-run-state', `state-${run.taskState}`]"></span>
+                    <span class="trace-run-code">{{ run.runCode.slice(0, 16) }}</span>
+                  </div>
+                  <div class="trace-run-item-meta">
+                    <span>{{ run.taskState }}</span>
+                    <span>{{ formatTime(run.createTime) }}</span>
+                  </div>
+                </div>
+                <div v-if="!runListLoading && runList.length === 0" class="trace-run-empty">
+                  暂无运行记录
+                </div>
+              </div>
+            </div>
+            <!-- 轨迹详情 -->
+            <div class="trace-detail">
           <!-- Trace Stats Bar -->
           <div class="trace-stats-bar">
             <div class="trace-stat">
