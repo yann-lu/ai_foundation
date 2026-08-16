@@ -84,10 +84,12 @@ ai-foundation-parent (pom)
 ### Playground 测试台
 - 页面路径：`/playground`，面向后台开发与调试人员。
 - 交互流程：选择项目 → 新建或选择历史会话 → 输入可选 System Prompt → 发送用户消息 → 通过 `/chat/runs/create` + `/chat/runs/events` 订阅 Run 事件。
-- 流式能力：使用浏览器 `EventSource` 消费 SSE，实时展示 `run_start`、`chat_start`、`request_messages`、`chat_token`、`chat_complete`、`run_complete`、`run_error`、`run_cancelled`。
+- 流式能力：使用浏览器 `EventSource` 消费 SSE，实时展示 `run_start`、`chat_start`、`request_messages`、`chat_token`、`chat_complete`、`run_complete`、`run_error`、`run_cancelled`、`tool_call`、`tool_result`、`chat_reasoning`。
 - 提示词注入：模型调用前从当前会话的 `context_variables` 读取变量快照，替换 `agent_project.system_prompt` 中的 `{{变量}}`，再由 `ProjectSystemPromptAdvisor` 写入 Spring AI Prompt 的 system message。
-- 调试可观测：后端在模型调用前通过 `request_messages` 推送真实请求消息栈（系统提示词、历史消息、当前用户消息）；右侧 Run Inspector 默认展示 Messages 视图，可查看真实发送内容、AI 思考与 AI 回复，Trace 视图保留原 Run 生命周期时间线。
+- 双视图切换：主内容区支持「对话 / 轨迹」两种视图切换。对话视图为标准聊天界面 + 右侧 Run Inspector（Messages / Trace 两栏）；轨迹视图为完整执行流程时间线。
+- 轨迹视图（Trace View）：独立的全流程时间线视图，按时间顺序展示 SYSTEM、USER、CONTEXT、THINKING、ASSISTANT、TOOL 等全部事件；顶部展示 Duration、Turns、Calls 统计与三段式时间条（Input / Model / Tools）；点击工具调用可在右侧详情面板查看 Summary、Payload、Result、Timing 四个维度的信息；支持关键词搜索过滤。
 - 思考链路：后端优先推送模型返回的 `reasoning_content` 为 `chat_reasoning` 事件；如模型仅在正文中输出 `<think>...</think>`，前端会解析该片段并在消息折叠区与右侧 Inspector 中展示。
+- 工具调用追踪：ReAct 模式下 `tool_call` / `tool_result` 事件自动配对，工具卡片内联展示参数与结果预览，展开可查看完整 Payload 与返回值，详情面板展示执行耗时等时序信息。
 
 | 方法 | 路径 | 说明 | 鉴权 |
 | --- | --- | --- | --- |

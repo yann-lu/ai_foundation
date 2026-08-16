@@ -38,7 +38,7 @@ agent:
   orchestration-mode: PLAN
   ai:
     models:
-      chat: kimi-k2.6
+      chat: deepseek-v4-pro
       embedding: bge-m3
   retrieval:
     top-k: 5

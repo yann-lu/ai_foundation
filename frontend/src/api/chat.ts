@@ -34,6 +34,10 @@ export function streamRunEvents(runCode: string): EventSource {
   return new EventSource(`/chat/runs/events?runCode=${encodeURIComponent(runCode)}`)
 }
 
+export function getRunDetail(runCode: string): Promise<{ data: any }> {
+  return request.post<any, { data: any }>('/chat/runs/detail', { runCode })
+}
+
 export function cancelRun(runCode: string, operator?: string): Promise<{ data: boolean }> {
   return request.post<boolean, { data: boolean }>('/chat/runs/cancel', { runCode, operator })
 }

@@ -3,6 +3,8 @@ import { useAiRuntime } from '@/runtime/aui-runtime'
 import { Thread } from '@/components/assistant-ui/thread'
 import { Sidebar } from '@/components/playground/Sidebar'
 import { Inspector } from '@/components/playground/Inspector'
+import { TraceView } from '@/components/playground/TraceView'
+import { MessageSquare, Activity } from 'lucide-react'
 import { pageProjects } from '@/api/project'
 import { pageConversations, createConversation } from '@/api/conversation'
 import { getMessages, getLatestRun } from '@/api/chat'
@@ -10,6 +12,7 @@ import type { AgentProjectDTO, ConversationDTO } from '@/types/api'
 import { Plus, Sun, Moon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useTheme } from '@/lib/useTheme'
+import { cn } from '@/lib/utils'
 
 interface Props {
   nickname: string
@@ -46,6 +49,7 @@ export default function Playground({ nickname, onLogout }: Props) {
   const [variableDialogOpen, setVariableDialogOpen] = useState(false)
   const [pendingVariables, setPendingVariables] = useState<PromptVariableDefinition[]>([])
   const [contextVariableForm, setContextVariableForm] = useState<Record<string, unknown>>({})
+  const [mainView, setMainView] = useState<'chat' | 'trace'>('chat')
 
   const loadProjects = useCallback(async () => {
     try {
@@ -201,6 +205,32 @@ export default function Playground({ nickname, onLogout }: Props) {
               </>
             )}
           </div>
+          {activeConvCode && (
+            <div className="ml-4 flex items-center gap-0.5 rounded-lg bg-muted/50 p-0.5">
+              <button
+                onClick={() => setMainView('chat')}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                  mainView === 'chat'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <MessageSquare className="size-3.5" /> 对话
+              </button>
+              <button
+                onClick={() => setMainView('trace')}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors',
+                  mainView === 'trace'
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                <Activity className="size-3.5" /> 轨迹
+              </button>
+            </div>
+          )}
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={toggle}
@@ -221,35 +251,39 @@ export default function Playground({ nickname, onLogout }: Props) {
           </div>
         </header>
 
-        <div className="border-border bg-card/30 flex items-center gap-2 border-b px-4 py-2">
-          <span className="text-primary shrink-0 text-xs font-semibold">
-            SYSTEM PROMPT
-          </span>
-          <input
-            value={ai.systemPrompt}
-            onChange={(e) => ai.setSystemPrompt(e.target.value)}
-            placeholder="可选。临时覆盖本次 Run 的行为约束。留空使用默认。"
-            className="text-foreground placeholder:text-muted-foreground/60 h-7 min-w-0 flex-1 rounded-md bg-transparent px-2 text-sm outline-none"
-          />
-        </div>
+        {mainView === 'chat' && activeConvCode && (
+          <div className="border-border bg-card/30 flex items-center gap-2 border-b px-4 py-2">
+            <span className="text-primary shrink-0 text-xs font-semibold">
+              SYSTEM PROMPT
+            </span>
+            <input
+              value={ai.systemPrompt}
+              onChange={(e) => ai.setSystemPrompt(e.target.value)}
+              placeholder="可选。临时覆盖本次 Run 的行为约束。留空使用默认。"
+              className="text-foreground placeholder:text-muted-foreground/60 h-7 min-w-0 flex-1 rounded-md bg-transparent px-2 text-sm outline-none"
+            />
+          </div>
+        )}
 
         <div className="min-h-0 flex-1">
-          {activeConvCode ? (
-            <ai.AssistantRuntimeProvider runtime={ai.runtime}>
-              <Thread />
-            </ai.AssistantRuntimeProvider>
-          ) : (
+          {!activeConvCode ? (
             <div className="text-muted-foreground flex h-full flex-col items-center justify-center gap-4">
               <div className="bg-primary/10 flex size-16 items-center justify-center rounded-2xl">
                 <Plus className="text-primary size-7" />
               </div>
               <p className="text-sm">选择历史会话或点击「新建会话」开始对话</p>
             </div>
+          ) : mainView === 'chat' ? (
+            <ai.AssistantRuntimeProvider runtime={ai.runtime}>
+              <Thread />
+            </ai.AssistantRuntimeProvider>
+          ) : (
+            <TraceView runEvents={ai.runEvents} runMeta={ai.runMeta} />
           )}
         </div>
       </main>
 
-      <Inspector runEvents={ai.runEvents} runMeta={ai.runMeta} />
+      {mainView === 'chat' && <Inspector runEvents={ai.runEvents} runMeta={ai.runMeta} />}
 
       {variableDialogOpen && (
         <div className="bg-background/70 fixed inset-0 z-50 flex items-center justify-center backdrop-blur-sm">

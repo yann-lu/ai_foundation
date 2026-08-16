@@ -166,6 +166,7 @@ export interface CreateRunResponse {
 export type RunEventType =
   | 'run_start'
   | 'chat_start'
+  | 'user_message'
   | 'request_messages'
   | 'chat_reasoning'
   | 'chat_token'

@@ -1,13 +1,13 @@
 package com.ai.foundation.mediator.run;
 
 import com.ai.foundation.biz.conversation.AgentMessageService;
-import com.ai.foundation.biz.run.AgentRunService;
+import com.ai.foundation.biz.run.AgentRunInfoService;
 import com.ai.foundation.com.constant.RunTypeConstant;
 import com.ai.foundation.com.enums.RunStateEnum;
 import com.ai.foundation.com.enums.RunStreamEventTypeEnum;
 import com.ai.foundation.com.stream.RunStreamEnvelope;
 import com.ai.foundation.dal.entity.AgentConversationInfo;
-import com.ai.foundation.dal.entity.AgentRun;
+import com.ai.foundation.dal.entity.AgentRunInfo;
 import com.ai.foundation.mediator.chat.AiChatMedService;
 import com.ai.foundation.mediator.chat.ChatHistoryComposer;
 import com.ai.foundation.mediator.chat.ChatStreamChunk;
@@ -32,7 +32,7 @@ import java.util.List;
 public class AgentOrchestrator {
 
     private final AiChatMedService aiChatMedService;
-    private final AgentRunService runService;
+    private final AgentRunInfoService runInfoService;
     private final AgentMessageService messageService;
     private final ChatHistoryComposer chatHistoryComposer;
     private final ObjectMapper objectMapper;
@@ -53,7 +53,7 @@ public class AgentOrchestrator {
      * @param systemPrompt 系统提示词（可选）
      * @return 事件流
      */
-    public Flux<RunStreamEnvelope> streamRun(AgentRun run, AgentConversationInfo conversation,
+    public Flux<RunStreamEnvelope> streamRun(AgentRunInfo run, AgentConversationInfo conversation,
                                                String userMessage, String systemPrompt) {
         String runCode = run.getRunCode();
         String conversationCode = conversation.getConversationCode();
@@ -145,7 +145,7 @@ public class AgentOrchestrator {
      * @param run              已持久化的 Run
      * @param conversationCode 会话编码
      */
-    public void cancelRun(AgentRun run, String conversationCode) {
+    public void cancelRun(AgentRunInfo run, String conversationCode) {
         updateRunState(run, run.getRunType(), RunStateEnum.CANCELLED, 2);
         log.info("Run 已取消 runCode={}", run.getRunCode());
     }
@@ -153,15 +153,15 @@ public class AgentOrchestrator {
     /**
      * 写回 Run 详情（消息栈 / 回复 / 思考链）到 agent_run 表，供刷新后 Inspector 还原。
      */
-    private void saveRunDetails(AgentRun run, List<ChatRequestMessage> requestMessages,
+    private void saveRunDetails(AgentRunInfo run, List<ChatRequestMessage> requestMessages,
                                 String reply, String reasoning) {
         try {
-            AgentRun update = new AgentRun();
+            AgentRunInfo update = new AgentRunInfo();
             update.setId(run.getId());
             update.setRequestMessages(objectMapper.writeValueAsString(requestMessages));
             update.setReply(StringUtils.defaultString(reply));
             update.setReasoning(StringUtils.defaultString(reasoning));
-            runService.updateById(update);
+            runInfoService.updateById(update);
         } catch (JsonProcessingException e) {
             log.warn("序列化 requestMessages 失败 runCode={}", run.getRunCode(), e);
         } catch (Exception e) {
@@ -169,14 +169,14 @@ public class AgentOrchestrator {
         }
     }
 
-    private void updateRunState(AgentRun run, String runType, RunStateEnum state, int compatState) {
-        AgentRun update = new AgentRun();
+    private void updateRunState(AgentRunInfo run, String runType, RunStateEnum state, int compatState) {
+        AgentRunInfo update = new AgentRunInfo();
         update.setId(run.getId());
         update.setRunType(runType);
         update.setTaskState(state.getCode());
         update.setState(compatState);
         update.setUpdateTime(LocalDateTime.now());
-        runService.updateById(update);
+        runInfoService.updateById(update);
         run.setRunType(runType);
         run.setTaskState(state.getCode());
         run.setState(compatState);

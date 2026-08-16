@@ -31,3 +31,11 @@ spring:
 logging:
   level:
     com.ai.foundation: DEBUG
+
+agent:
+  ai:
+    models:
+      chat: deepseek-v4-pro
+      embedding: bge-m3
+    conversation:
+      summary-model: deepseek-v4-flash

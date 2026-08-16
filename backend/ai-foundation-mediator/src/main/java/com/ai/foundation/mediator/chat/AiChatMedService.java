@@ -37,7 +37,6 @@ import java.util.Locale;
 @RequiredArgsConstructor
 public class AiChatMedService {
 
-    private static final String DEFAULT_SYSTEM_PROMPT = "你是一个智能助手，请简洁、专业地回答用户问题。";
 
     private final ChatClient.Builder chatClientBuilder;
     private final AgentConversationMedService conversationMedService;
@@ -227,7 +226,7 @@ public class AiChatMedService {
         AgentProject project = projectService.getById(conversation.getProjectId());
         String summaryBlock = chatHistoryComposer.getSummaryBlock(conversation);
         return projectPromptService.buildSystemPrompt(project, conversation,
-                summaryBlock, requestSystemPrompt, DEFAULT_SYSTEM_PROMPT);
+                summaryBlock, requestSystemPrompt, null);
     }
 
     /**

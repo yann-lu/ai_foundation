@@ -2,7 +2,7 @@ package com.ai.foundation.mediator.run;
 
 import com.ai.foundation.biz.conversation.AgentConversationService;
 import com.ai.foundation.biz.conversation.AgentMessageService;
-import com.ai.foundation.biz.run.AgentRunService;
+import com.ai.foundation.biz.run.AgentRunInfoService;
 import com.ai.foundation.com.constant.RunTypeConstant;
 import com.ai.foundation.com.enums.RunStateEnum;
 import com.ai.foundation.com.enums.RunStreamEventTypeEnum;
@@ -12,8 +12,9 @@ import com.ai.foundation.com.stream.RunStreamEnvelope;
 import com.ai.foundation.com.trace.TraceUtils;
 import com.ai.foundation.dal.entity.AgentConversationInfo;
 import com.ai.foundation.dal.entity.AgentMessageInfo;
-import com.ai.foundation.dal.entity.AgentRun;
+import com.ai.foundation.dal.entity.AgentRunInfo;
 import com.ai.foundation.mediator.conversation.AgentConversationMedService;
+import com.ai.foundation.mediator.agent.react.core.ReactAgentRunner;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -32,10 +33,11 @@ import java.util.concurrent.ConcurrentMap;
 @RequiredArgsConstructor
 public class AgentRunMedService {
 
-    private final AgentRunService runService;
+    private final AgentRunInfoService runInfoService;
     private final AgentConversationMedService conversationMedService;
     private final AgentMessageService messageService;
     private final AgentOrchestrator orchestrator;
+    private final ReactAgentRunner reactAgentRunner;
     private final AgentConversationService conversationService;
 
     /** 待执行 Run 参数，createRun 时存入，streamRunEvents 订阅时取出启动。 */
@@ -69,16 +71,16 @@ public class AgentRunMedService {
         AgentMessageInfo userMsg = saveUserMessage(conversation.getId(), trimmedMessage, clientIp);
         String traceId = TraceUtils.newTraceId();
 
-        AgentRun run = new AgentRun();
+        AgentRunInfo run = new AgentRunInfo();
         run.setRunCode(RunCodeGenerator.generate());
         run.setTraceId(traceId);
         run.setConversationId(conversation.getId());
         run.setMessageId(userMsg.getId());
         run.setProductCode(StringUtils.defaultIfBlank(conversation.getProductCode(), ""));
-        run.setRunType(RunTypeConstant.CHAT);
+        run.setRunType(RunTypeConstant.REACT);
         run.setTaskState(RunStateEnum.CREATED.getCode());
         run.setState(0);
-        runService.save(run);
+        runInfoService.save(run);
 
         String runCode = run.getRunCode();
         pendingRuns.put(runCode, new PendingRun(run, conversation, trimmedMessage, trimmedSystemPrompt));
@@ -104,7 +106,7 @@ public class AgentRunMedService {
         cancelSignals.put(trimmedRunCode, cancelSignal);
 
         return Mono.fromCallable(() -> {
-                AgentRun run = runService.getByRunCode(trimmedRunCode);
+                AgentRunInfo run = runInfoService.getByRunCode(trimmedRunCode);
                 if (run == null) {
                     throw new BusinessException(ResultCode.DATA_NOT_FOUND, "Run不存在");
                 }
@@ -112,7 +114,7 @@ public class AgentRunMedService {
                 if (pending == null) {
                     throw new BusinessException(ResultCode.STATE_INVALID, "Run已启动或不存在");
                 }
-                updateRunState(pending.run(), RunTypeConstant.CHAT, RunStateEnum.EXECUTING, 0);
+                updateRunState(pending.run(), RunTypeConstant.REACT, RunStateEnum.EXECUTING, 0);
                 return pending;
             })
             .subscribeOn(Schedulers.boundedElastic())
@@ -120,13 +122,20 @@ public class AgentRunMedService {
                 String rc = pending.run().getRunCode();
                 String cc = pending.conversation().getConversationCode();
                 return Flux.merge(
-                    orchestrator.streamRun(pending.run(), pending.conversation(),
-                            pending.userMessage(), pending.systemPrompt()),
+                    reactAgentRunner.streamReactRun(
+                            pending.run(), pending.conversation(),
+                            pending.userMessage(), pending.systemPrompt(),
+                            cancelSignal),
                     cancelSignal.asMono()
                         .map(v -> cancelledEnvelope(rc, cc))
                         .cast(RunStreamEnvelope.class)
-                ).takeUntil(e -> isTerminal(e.getEventType()));
+                )
+                .takeUntil(e -> isTerminal(e.getEventType()))
+                .concatWith(Mono.fromCallable(() -> envelopeRunComplete(
+                        trimmedRunCode, pending.conversation().getConversationCode()))
+                        .subscribeOn(Schedulers.boundedElastic()));
             })
+            .takeUntil(e -> isTerminal(e.getEventType()))
             .doFinally(signal -> cancelSignals.remove(trimmedRunCode));
     }
 
@@ -136,11 +145,11 @@ public class AgentRunMedService {
      * @param runCode Run 编码
      * @return Run 详情
      */
-    public AgentRun getRunDetail(String runCode) {
+    public AgentRunInfo getRunDetail(String runCode) {
         if (StringUtils.isBlank(runCode)) {
             throw new BusinessException(ResultCode.PARAM_INVALID, "Run编码不能为空");
         }
-        AgentRun run = runService.getByRunCode(runCode.trim());
+        AgentRunInfo run = runInfoService.getByRunCode(runCode.trim());
         if (run == null) {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "Run不存在");
         }
@@ -153,7 +162,7 @@ public class AgentRunMedService {
      * @param conversationCode 会话编码
      * @return 最近一条 Run，没有则返回 null
      */
-    public AgentRun getLatestRunByConversation(String conversationCode) {
+    public AgentRunInfo getLatestRunByConversation(String conversationCode) {
         if (StringUtils.isBlank(conversationCode)) {
             return null;
         }
@@ -161,7 +170,7 @@ public class AgentRunMedService {
         if (conversation == null) {
             return null;
         }
-        return runService.getLatestByConversationId(conversation.getId());
+        return runInfoService.getLatestByConversationId(conversation.getId());
     }
 
     /**
@@ -175,7 +184,7 @@ public class AgentRunMedService {
             throw new BusinessException(ResultCode.PARAM_INVALID, "Run编码不能为空");
         }
         String trimmedRunCode = runCode.trim();
-        AgentRun run = runService.getByRunCode(trimmedRunCode);
+        AgentRunInfo run = runInfoService.getByRunCode(trimmedRunCode);
         if (run == null) {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "Run不存在");
         }
@@ -201,7 +210,7 @@ public class AgentRunMedService {
         if (StringUtils.isBlank(runCode)) {
             throw new BusinessException(ResultCode.PARAM_INVALID, "Run编码不能为空");
         }
-        AgentRun run = runService.getByRunCode(runCode.trim());
+        AgentRunInfo run = runInfoService.getByRunCode(runCode.trim());
         if (run == null) {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "Run不存在");
         }
@@ -221,14 +230,14 @@ public class AgentRunMedService {
         return msg;
     }
 
-    private void updateRunState(AgentRun run, String runType, RunStateEnum state, int compatState) {
-        AgentRun update = new AgentRun();
+    private void updateRunState(AgentRunInfo run, String runType, RunStateEnum state, int compatState) {
+        AgentRunInfo update = new AgentRunInfo();
         update.setId(run.getId());
         update.setRunType(runType);
         update.setTaskState(state.getCode());
         update.setState(compatState);
         update.setUpdateTime(LocalDateTime.now());
-        runService.updateById(update);
+        runInfoService.updateById(update);
         run.setRunType(runType);
         run.setTaskState(state.getCode());
         run.setState(compatState);
@@ -251,6 +260,22 @@ public class AgentRunMedService {
                 || RunStreamEventTypeEnum.RUN_CANCELLED.getCode().equals(eventType);
     }
 
-    private record PendingRun(AgentRun run, AgentConversationInfo conversation,
+    private record PendingRun(AgentRunInfo run, AgentConversationInfo conversation,
                               String userMessage, String systemPrompt) {}
+    private RunStreamEnvelope envelopeRunComplete(String runCode, String conversationCode) {
+        RunStreamEnvelope env = new RunStreamEnvelope();
+        env.setEventType(RunStreamEventTypeEnum.RUN_COMPLETE.getCode());
+        env.setRunCode(runCode);
+        env.setConversationCode(conversationCode);
+        env.setTimestamp(System.currentTimeMillis());
+        env.setTaskState(RunStateEnum.COMPLETED.getCode());
+        try {
+            AgentRunInfo run = runInfoService.getByRunCode(runCode);
+            env.setData(run != null ? run.getReply() : "");
+        } catch (Exception e) {
+            env.setData("");
+        }
+        return env;
+    }
+
 }

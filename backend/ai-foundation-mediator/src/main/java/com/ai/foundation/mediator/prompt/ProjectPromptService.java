@@ -56,11 +56,15 @@ public class ProjectPromptService {
         String contextBlock = formatContextBlock(variables);
 
         StringBuilder sb = new StringBuilder();
-        appendBlock(sb, defaultSystemPrompt);
-        appendBlock(sb, projectPrompt);
+        if (StringUtils.isNotBlank(projectPrompt)) {
+            appendBlock(sb, projectPrompt);
+        }
         appendBlock(sb, contextBlock);
         appendBlock(sb, summaryBlock);
         appendBlock(sb, requestSystemPrompt);
+        if (sb.isEmpty() && StringUtils.isNotBlank(defaultSystemPrompt)) {
+            sb.append(defaultSystemPrompt.trim());
+        }
         return sb.toString();
     }
 

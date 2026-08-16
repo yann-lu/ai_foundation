@@ -12,8 +12,8 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Data
-@TableName("agent_run")
-public class AgentRun {
+@TableName("agent_run_info")
+public class AgentRunInfo {
 
     @TableId(type = IdType.AUTO)
     private Long id;

@@ -22,4 +22,7 @@ public class RunDetailResponse {
 
     /** 思考链内容。 */
     private String reasoning;
+
+    /** 子任务/工具调用列表。 */
+    private java.util.List<RunTaskDTO> tasks;
 }

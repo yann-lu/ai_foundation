@@ -2,7 +2,8 @@ package com.ai.foundation.gateway.controller;
 
 import com.ai.foundation.com.response.ApiResponse;
 import com.ai.foundation.com.stream.RunStreamEnvelope;
-import com.ai.foundation.dal.entity.AgentRun;
+import com.ai.foundation.dal.entity.AgentRunInfo;
+import com.ai.foundation.dal.entity.AgentRunTaskInfo;
 import com.ai.foundation.dal.entity.AgentConversationInfo;
 import com.ai.foundation.facade.dto.run.CreateRunRequest;
 import com.ai.foundation.facade.dto.run.CreateRunResponse;
@@ -10,8 +11,10 @@ import com.ai.foundation.facade.dto.run.RunCancelRequest;
 import com.ai.foundation.facade.dto.run.RunDetailRequest;
 import com.ai.foundation.facade.dto.run.RequestMessageDTO;
 import com.ai.foundation.facade.dto.run.RunDetailResponse;
+import com.ai.foundation.facade.dto.run.RunTaskDTO;
 import com.ai.foundation.gateway.util.MonoUtils;
 import com.ai.foundation.mediator.conversation.AgentConversationMedService;
+import com.ai.foundation.biz.run.AgentRunTaskInfoService;
 import com.ai.foundation.mediator.run.AgentRunMedService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -44,6 +47,7 @@ public class RunController {
             new TypeReference<>() {};
 
     private final AgentRunMedService runMedService;
+    private final AgentRunTaskInfoService taskInfoService;
     private final AgentConversationMedService conversationMedService;
     private final ObjectMapper objectMapper;
 
@@ -74,7 +78,7 @@ public class RunController {
     @PostMapping("/detail")
     public Mono<ApiResponse<RunDetailResponse>> detail(@Valid @RequestBody RunDetailRequest request) {
         return MonoUtils.fromBlocking(() -> {
-            AgentRun run = runMedService.getRunDetail(request.getRunCode());
+            AgentRunInfo run = runMedService.getRunDetail(request.getRunCode());
             AgentConversationInfo conversation = conversationMedService.requireById(run.getConversationId());
             RunDetailResponse response = new RunDetailResponse();
             response.setRunCode(run.getRunCode());
@@ -86,6 +90,7 @@ public class RunController {
             response.setRequestMessages(parseRequestMessages(run.getRequestMessages()));
             response.setReply(run.getReply());
             response.setReasoning(run.getReasoning());
+            response.setTasks(buildTaskDTOs(run.getId()));
             return response;
         }).map(ApiResponse::success);
     }
@@ -96,7 +101,7 @@ public class RunController {
     @GetMapping("/latest")
     public Mono<ApiResponse<RunDetailResponse>> latest(@RequestParam String conversationCode) {
         return MonoUtils.fromBlocking(() -> {
-            AgentRun run = runMedService.getLatestRunByConversation(conversationCode);
+            AgentRunInfo run = runMedService.getLatestRunByConversation(conversationCode);
             if (run == null) {
                 return null;
             }
@@ -111,6 +116,7 @@ public class RunController {
             response.setRequestMessages(parseRequestMessages(run.getRequestMessages()));
             response.setReply(run.getReply());
             response.setReasoning(run.getReasoning());
+            response.setTasks(buildTaskDTOs(run.getId()));
             return response;
         }).map(ApiResponse::success);
     }
@@ -154,4 +160,28 @@ public class RunController {
                 ? exchange.getRequest().getRemoteAddress().getAddress().getHostAddress()
                 : "";
     }
+
+    private java.util.List<RunTaskDTO> buildTaskDTOs(Long runId) {
+        if (runId == null) {
+            return java.util.Collections.emptyList();
+        }
+        java.util.List<AgentRunTaskInfo> tasks = taskInfoService.listByRunId(runId);
+        java.util.List<RunTaskDTO> result = new java.util.ArrayList<>();
+        for (AgentRunTaskInfo task : tasks) {
+            RunTaskDTO dto = new RunTaskDTO();
+            dto.setId(task.getId());
+            dto.setTaskCode(task.getTaskCode());
+            dto.setTaskType(task.getTaskType());
+            dto.setCapabilityType(task.getCapabilityType());
+            dto.setRefId(task.getRefId());
+            dto.setRefName(task.getRefName());
+            dto.setTaskState(task.getTaskState());
+            dto.setErrorMessage(task.getErrorMessage());
+            dto.setCostMs(task.getCostMs());
+            dto.setCreateTime(task.getCreateTime());
+            result.add(dto);
+        }
+        return result;
+    }
+
 }
