@@ -14,7 +14,22 @@ import com.ai.foundation.dal.entity.AgentConversationInfo;
 import com.ai.foundation.dal.entity.AgentMessageInfo;
 import com.ai.foundation.dal.entity.AgentRunInfo;
 import com.ai.foundation.mediator.conversation.AgentConversationMedService;
+import com.ai.foundation.biz.converter.RunConverter;
+import com.ai.foundation.biz.run.AgentRunEventLogService;
+import com.ai.foundation.biz.run.AgentRunTaskInfoService;
+import com.ai.foundation.com.response.PageResult;
+import com.ai.foundation.dal.entity.AgentRunEventLog;
+import com.ai.foundation.dal.entity.AgentRunTaskInfo;
+import com.ai.foundation.facade.dto.run.RequestMessageDTO;
+import com.ai.foundation.facade.dto.run.RunDetailResponse;
+import com.ai.foundation.facade.dto.run.RunEventDTO;
+import com.ai.foundation.facade.dto.run.RunTaskDTO;
+import com.ai.foundation.facade.dto.run.RunItemDTO;
 import com.ai.foundation.mediator.agent.react.core.ReactAgentRunner;
+import com.baomidou.mybatisplus.core.metadata.IPage;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -25,6 +40,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
+import java.util.List;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -39,8 +55,10 @@ public class AgentRunMedService {
     private final AgentOrchestrator orchestrator;
     private final ReactAgentRunner reactAgentRunner;
     private final AgentConversationService conversationService;
-    private final com.ai.foundation.biz.run.AgentRunEventLogService runEventLogService;
-    private final com.fasterxml.jackson.databind.ObjectMapper objectMapper;
+    private final AgentRunEventLogService runEventLogService;
+    private final AgentRunTaskInfoService taskInfoService;
+    private final RunConverter runConverter;
+    private final ObjectMapper objectMapper;
 
     /** 待执行 Run 参数，createRun 时存入，streamRunEvents 订阅时取出启动。 */
     private final ConcurrentMap<String, PendingRun> pendingRuns = new ConcurrentHashMap<>();
@@ -177,7 +195,7 @@ public class AgentRunMedService {
      * @param runCode Run 编码
      * @return Run 详情
      */
-    public AgentRunInfo getRunDetail(String runCode) {
+    public AgentRunInfo getRunDetailEntity(String runCode) {
         if (StringUtils.isBlank(runCode)) {
             throw new BusinessException(ResultCode.PARAM_INVALID, "Run编码不能为空");
         }
@@ -252,6 +270,76 @@ public class AgentRunMedService {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "Run不存在");
         }
         log.info("confirmRun runCode={} (骨架，无待确认任务)", runCode);
+    }
+
+
+    private static final TypeReference<List<RequestMessageDTO>> REQ_MSG_LIST_TYPE =
+            new TypeReference<>() {};
+
+    public RunDetailResponse getRunDetail(String runCode) {
+        AgentRunInfo run = getRunDetailEntity(runCode);
+        return buildRunDetailResponse(run);
+    }
+
+    public RunDetailResponse getLatestRunDetail(String conversationCode) {
+        AgentRunInfo run = getLatestRunByConversation(conversationCode);
+        if (run == null) {
+            return null;
+        }
+        return buildRunDetailResponse(run);
+    }
+
+    public List<RunEventDTO> listRunEvents(String runCode) {
+        AgentRunInfo run = getRunDetailEntity(runCode);
+        List<AgentRunEventLog> events = runEventLogService.listByRunId(run.getId());
+        return runConverter.toEventDtoList(events);
+    }
+
+    public PageResult<RunItemDTO> pageRunItems(String conversationCode, long current, long size) {
+        AgentConversationInfo conversation = conversationService.getByCode(conversationCode);
+        if (conversation == null) {
+            return new PageResult<>(List.of(), 0, current, size);
+        }
+        IPage<AgentRunInfo> page = pageRuns(conversation.getId(), current, size);
+        List<RunItemDTO> records = runConverter.toItemDtoList(page.getRecords());
+        return new PageResult<>(records, page.getTotal(), page.getCurrent(), page.getSize());
+    }
+
+    private RunDetailResponse buildRunDetailResponse(AgentRunInfo run) {
+        AgentConversationInfo conversation = conversationMedService.requireById(run.getConversationId());
+        RunDetailResponse response = new RunDetailResponse();
+        response.setRunCode(run.getRunCode());
+        response.setTraceId(run.getTraceId());
+        response.setConversationCode(conversation.getConversationCode());
+        response.setProductCode(run.getProductCode());
+        response.setRunType(run.getRunType());
+        response.setTaskState(run.getTaskState());
+        response.setRequestMessages(parseRequestMessages(run.getRequestMessages()));
+        response.setReply(run.getReply());
+        response.setReasoning(run.getReasoning());
+        response.setTasks(buildTaskDtos(run.getId()));
+        return response;
+    }
+
+    private List<RunTaskDTO> buildTaskDtos(Long runId) {
+        if (runId == null) {
+            return List.of();
+        }
+        List<AgentRunTaskInfo> tasks = taskInfoService.listByRunId(runId);
+        return runConverter.toTaskDtoList(tasks);
+    }
+
+    private List<RequestMessageDTO> parseRequestMessages(String json) {
+        if (StringUtils.isBlank(json)) {
+            return List.of();
+        }
+        try {
+            List<RequestMessageDTO> list = objectMapper.readValue(json, REQ_MSG_LIST_TYPE);
+            return list == null ? List.of() : list;
+        } catch (JsonProcessingException e) {
+            log.warn("解析 requestMessages 失败", e);
+            return List.of();
+        }
     }
 
     // ========================= 内部方法 =========================

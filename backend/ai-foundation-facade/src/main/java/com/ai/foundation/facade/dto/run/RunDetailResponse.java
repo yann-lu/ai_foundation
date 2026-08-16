@@ -24,5 +24,5 @@ public class RunDetailResponse {
     private String reasoning;
 
     /** 子任务/工具调用列表。 */
-    private java.util.List<RunTaskDTO> tasks;
+    private List<RunTaskDTO> tasks;
 }
