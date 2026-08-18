@@ -37,7 +37,15 @@ logs/
 *.env.local
 
 # Local agent state
-.zcode/plans/
-.cursor/chat*
-.cursor/plans/
-.cursor/*.log
+.cursor/
+.zcode/
+
+# Legacy non-backend code kept on disk only (not tracked)
+PROJECT.md
+docs/
+evaluation/
+frontend/
+frontend-playground/
+mcp-servers/
+start-all.sh
+stop-all.sh
