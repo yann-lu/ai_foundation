@@ -60,6 +60,13 @@
                 <artifactId>spring-boot-maven-plugin</artifactId>
                 <configuration>
                     <mainClass>com.ai.foundation.gateway.GatewayApplication</mainClass>
+                    <!--
+                      解决 macOS 上 Netty DNS resolver + Java 25 restricted method 的兼容问题：
+                      /enable-native-access=ALL-UNNAMED  允许 Netty 调 native DNS lib
+                      -Dio.netty.resolver.dns.default.server.addresses  强制 Netty 用本地 DNS + Google 公共 DNS 作为 fallback
+                      没有这两条，所有出站 HTTP（Spring AI 调 LLM、ApiToolExecutor 调外部 API）都会卡在 UnknownHostException
+                    -->
+                    <jvmArguments>--enable-native-access=ALL-UNNAMED -Dio.netty.resolver.dns.default.server.addresses=127.0.0.1,8.8.8.8</jvmArguments>
                 </configuration>
             </plugin>
         </plugins>

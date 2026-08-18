@@ -1,77 +1,35 @@
-# AI Foundation
+# AI Foundation Backend
 
-Agent 编排平台 — 后端（Spring Boot 3 + WebFlux + Spring AI Alibaba）+ 管理后台（Vue3 + Element Plus）。
+Spring Boot 3 + WebFlux + Spring AI Alibaba 的 Agent 编排平台后端。
 
-## 一键启动
+## 模块结构
 
-```bash
-# 启动全部服务（后端 + 管理后台 + Playground）
-./start-all.sh
+Maven 多模块工程，根 POM 在 `backend/pom.xml`：
 
-# 停止全部服务
-./stop-all.sh
-```
+- `ai-foundation-com` — 公共工具、常量、异常
+- `ai-foundation-dal` — MyBatis-Plus 数据访问层、实体、Mapper
+- `ai-foundation-facade` — 对外 RPC / API 外观接口
+- `ai-foundation-biz` — 业务实现（项目、模型、会话、Run、Skill、MCP）
+- `ai-foundation-mediator` — Agent 编排（React Agent、MCP 工具桥接、Prompt 组装）
+- `ai-foundation-gateway` — Spring Boot 启动入口，REST/WebFlux 网关
 
-启动后访问：
+## 环境要求
 
-| 服务 | 地址 | 说明 |
-| --- | --- | --- |
-| 后端 API | http://localhost:8080 | Spring Boot WebFlux |
-| 健康检查 | http://localhost:8080/actuator/health | 返回 `{"status":"UP"}` 表示正常 |
-| 管理后台 | http://localhost:5173 | Vue3 + Element Plus，账号 `admin` / `admin123` |
-| Playground | http://localhost:5174 | React 对话调试台，支持流式输出与思考链路查看 |
-
-## 快速开始
-
-### 1. 环境要求
-- Java 17（Corretto/Zulu 17）
+- Java 17（Corretto / Zulu 17）
 - Maven 3.6+
-- Node 20+ / npm
-- MySQL 8+/9.x、Redis
+- MySQL 8+ / 9.x、Redis
+- 模型服务（Ollama OpenAI 兼容或云模型）
 
-### 2. 启动中间件
-```bash
-brew services start mysql
-brew services start redis
-ollama serve   # 本地模型服务（OpenAI 兼容，默认端口 11434）
-```
-建库建表：执行 `docs/full-schema-ddl.sql` 中核心表（或全量）。库名 `ai_foundation`，用户 `ai_app` / `AiApp@2026`。
+## 启动
 
-拉取模型：`ollama pull deepseek-r1:1.5b`
-
-### 3. 启动后端
 ```bash
 cd backend
-export JAVA_HOME=<你的 Java17 路径>
 mvn -Pqa -DskipTests install
 mvn -pl ai-foundation-gateway spring-boot:run -Pqa
 ```
-验证：`curl http://localhost:8080/actuator/health` → `{"status":"UP"}`
 
-### 4. 启动前端
-```bash
-cd frontend
-npm install
-npm run dev
-```
-浏览器访问 http://localhost:5173 ，账号 `admin` / `admin123`。
+健康检查：`curl http://localhost:8080/actuator/health` → `{"status":"UP"}`
 
-### 5. 访问地址
-- 后端：http://localhost:8080（健康检查 UP）
-- 前端：http://localhost:5173（浏览器访问，用 `admin` / `admin123` 登录）
-- Playground：http://localhost:5174（对话调试台）
-- 中间件：MySQL 9.x（localhost:3306，库 `ai_foundation`，用户 `ai_app` / `AiApp@2026`）、Redis 8.x（localhost:6379）
-- 模型服务：Ollama（localhost:11434，当前使用 `deepseek-r1:1.5b`）
+## 数据库
 
-### 功能页面
-- 项目配置、模型配置、会话管理（管理后台菜单）
-- Playground：对话后台测试台，支持项目/历史会话切换、System Prompt 临时覆盖、Run SSE 事件时间线、真实模型请求消息栈、逐 token 流式输出，以及解析 `<think>...</think>` / `reasoning_content` 思考链路
-- Project 固定系统提示词与变量：项目配置中维护 `system_prompt`、`prompt_variables`，创建会话时写入变量快照，调用模型时通过 Spring AI Advisor 注入替换后的系统提示词，设计见 `docs/project-prompt-variables-design.md`
-
-
-## 目录结构
-- `backend/` — Maven 多模块后端（com/dal/facade/biz/mediator/gateway）
-- `frontend/` — Vue3 + Element Plus 管理后台
-- `docs/` — 路线图与 DDL
-
-详见 `PROJECT.md`。
+库名 `ai_foundation`，用户 `ai_app`。DDL 见各服务本地维护的迁移脚本（`docs/` 目录不进入本仓库）。

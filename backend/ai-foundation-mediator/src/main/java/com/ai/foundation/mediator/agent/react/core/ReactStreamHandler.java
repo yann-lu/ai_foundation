@@ -16,17 +16,21 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Slf4j
 @Getter
 public class ReactStreamHandler {
 
+    /** 匹配模型输出中的 <think>...</think> 块（含未闭合的流式尾部）。 */
+    private static final Pattern THINK_PATTERN =
+            Pattern.compile("(?is)<think>([\\s\\S]*?)(</think>|$)");
+
     private final String runCode;
     private final String conversationCode;
 
     private final StringBuilder contentBuilder = new StringBuilder();
-    private final StringBuilder reasoningBuilder = new StringBuilder();
-    private final StringBuilder thoughtBuffer = new StringBuilder();
 
     private String finalReply = "";
     private boolean hasToolInvoked = false;
@@ -57,20 +61,17 @@ public class ReactStreamHandler {
         return events;
     }
 
+    /**
+     * 模型流式输出统一按正文 token 推送。思考内容（<think> 标签）由前端
+     * parseThink 实时拆分展示，后端在完成时提取入库。
+     */
     private void handleModelStreaming(StreamingOutput<?> output, List<RunStreamEnvelope> events) {
         String delta = output.chunk();
         if (StringUtils.isBlank(delta)) {
             return;
         }
-
-        if (hasToolInvoked || contentBuilder.length() > 0) {
-            contentBuilder.append(delta);
-            events.add(envelope(RunStreamEventTypeEnum.CHAT_TOKEN, delta));
-        } else {
-            thoughtBuffer.append(delta);
-            reasoningBuilder.append(delta);
-            events.add(envelope(RunStreamEventTypeEnum.CHAT_REASONING, delta));
-        }
+        contentBuilder.append(delta);
+        events.add(envelope(RunStreamEventTypeEnum.CHAT_TOKEN, delta));
     }
 
     private void handleModelFinished(StreamingOutput<?> output, List<RunStreamEnvelope> events) {
@@ -91,7 +92,6 @@ public class ReactStreamHandler {
                 tc.put("arguments", toolCall.arguments());
                 events.add(envelope(RunStreamEventTypeEnum.TOOL_CALL, tc));
             }
-            thoughtBuffer.setLength(0);
             contentBuilder.setLength(0);
             return;
         }
@@ -151,16 +151,31 @@ public class ReactStreamHandler {
         if (contentBuilder.length() > 0) {
             return contentBuilder.toString().trim();
         }
-        // 3. 兜底：模型没有调任何工具时，所有文本会被误判到 reasoningBuilder，
-        //    此时 reasoning 就是真正的答复
-        if (reasoningBuilder.length() > 0) {
-            return reasoningBuilder.toString().trim();
-        }
         return "";
     }
 
+    /**
+     * 从最终答复中提取 <think> 思考块，用于持久化与 Inspector 回填。
+     */
     public String getReasoning() {
-        return reasoningBuilder.toString();
+        String fullText = StringUtils.isNotBlank(finalReply)
+                ? finalReply
+                : contentBuilder.toString();
+        if (StringUtils.isBlank(fullText)) {
+            return "";
+        }
+        StringBuilder sb = new StringBuilder();
+        Matcher matcher = THINK_PATTERN.matcher(fullText);
+        while (matcher.find()) {
+            String block = matcher.group(1).trim();
+            if (!block.isEmpty()) {
+                if (sb.length() > 0) {
+                    sb.append("\n\n");
+                }
+                sb.append(block);
+            }
+        }
+        return sb.toString();
     }
 
     private RunStreamEnvelope envelope(RunStreamEventTypeEnum type, Object data) {

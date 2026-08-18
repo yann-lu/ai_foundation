@@ -19,11 +19,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.regex.Matcher;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
 public class ProjectPromptService {
+
+    private static final DateTimeFormatter DATE_FORMATTER = DateTimeFormatter.ofPattern("yyyy年M月d日");
+    private static final DateTimeFormatter DATETIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     private static final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{\\{\\s*([A-Za-z][A-Za-z0-9_.-]*)\\s*}}");
     private static final TypeReference<List<PromptVariableDefinition>> VARIABLE_LIST_TYPE = new TypeReference<>() {};
@@ -54,8 +60,10 @@ public class ProjectPromptService {
         Map<String, Object> variables = parseVariableValues(conversation.getContextVariables());
         String projectPrompt = project == null ? null : renderPrompt(project.getSystemPrompt(), variables);
         String contextBlock = formatContextBlock(variables);
+        String datetimeBlock = buildDatetimeBlock();
 
         StringBuilder sb = new StringBuilder();
+        appendBlock(sb, datetimeBlock);
         if (StringUtils.isNotBlank(projectPrompt)) {
             appendBlock(sb, projectPrompt);
         }
@@ -169,6 +177,13 @@ public class ProjectPromptService {
         }
         matcher.appendTail(sb);
         return sb.toString().trim();
+    }
+
+    private String buildDatetimeBlock() {
+        LocalDate today = LocalDate.now();
+        LocalDateTime now = LocalDateTime.now();
+        return "今天日期：" + today.format(DATE_FORMATTER) + "\n"
+                + "当前时间：" + now.format(DATETIME_FORMATTER);
     }
 
     private String formatContextBlock(Map<String, Object> variables) {

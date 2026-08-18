@@ -18,6 +18,9 @@ import com.ai.foundation.dal.entity.AgentProject;
 import com.ai.foundation.dal.entity.AgentRunInfo;
 import com.ai.foundation.mediator.agent.context.AgentExecutionContext;
 import com.ai.foundation.mediator.agent.react.cli.ReactCliToolFactory;
+import com.ai.foundation.mediator.agent.react.skill.ReactSystemPromptComposer;
+import com.ai.foundation.mediator.chat.AiChatMedService;
+import com.ai.foundation.mediator.chat.ChatHistoryComposer;
 import com.ai.foundation.mediator.model.AgentModelResolver;
 import com.alibaba.cloud.ai.graph.NodeOutput;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
@@ -46,21 +49,6 @@ import java.util.List;
 @RequiredArgsConstructor
 public class ReactAgentRunner {
 
-    private static final String DEFAULT_REACT_SYSTEM_PROMPT = """
-            你是一个专业的 AI 助手，能够通过调用工具来帮助用户解决问题。
-            
-            工作方式：
-            1. 理解用户的需求
-            2. 如需外部信息，调用合适的工具
-            3. 根据工具返回结果继续思考或给出最终答案
-            4. 可以进行多轮工具调用直到完成任务
-            
-            注意事项：
-            - 严格按照工具定义的参数格式调用
-            - 调用工具时参数名要准确
-            - 如果工具返回错误，尝试修正参数或换一个工具
-            - 最终回答要简洁、准确、有帮助
-            """;
 
     private final ChatModel chatModel;
     private final AgentModelResolver modelResolver;
@@ -72,10 +60,14 @@ public class ReactAgentRunner {
     private final AgentProjectSkillRelService projectSkillRelService;
     private final AgentSkillDefinitionService skillDefinitionService;
     private final AgentSkillResourceService skillResourceService;
+    private final AiChatMedService aiChatMedService;
+    private final ChatHistoryComposer chatHistoryComposer;
+    private final ReactSystemPromptComposer systemPromptComposer;
 
     public Flux<RunStreamEnvelope> streamReactRun(AgentRunInfo run, AgentConversationInfo conversation,
                                                    String userMessage, String systemPrompt,
                                                    Sinks.Empty<Void> cancelSignal) {
+        long startTime = System.currentTimeMillis();
         String runCode = run.getRunCode();
         String conversationCode = conversation.getConversationCode();
         Long projectId = conversation.getProjectId();
@@ -139,6 +131,12 @@ public class ReactAgentRunner {
                             try {
                                 saveRunResult(run, reply, streamHandler.getReasoning());
                                 updateRunState(run, RunStateEnum.COMPLETED, 1);
+                                if (StringUtils.isNotBlank(reply)) {
+                                    long duration = System.currentTimeMillis() - startTime;
+                                    aiChatMedService.saveAssistantMessage(conversation, reply, duration);
+                                    chatHistoryComposer.completeTurn(conversation.getId(),
+                                            userMessage, reply, conversation.getModelName());
+                                }
                             } catch (Exception ex) {
                                 log.warn("保存 Run 结果失败 runCode={}", runCode, ex);
                             }
@@ -168,43 +166,22 @@ public class ReactAgentRunner {
 
     private String buildFinalSystemPrompt(Long projectId, String userSystemPrompt,
                                            List<AgentCliCommand> cliList) {
-        StringBuilder sb = new StringBuilder();
+        String projectSystemPrompt = loadProjectSystemPrompt(projectId);
+        List<AgentSkillDefinition> skills = loadProjectSkills(projectId);
+        return systemPromptComposer.compose(projectSystemPrompt, skills, cliList, userSystemPrompt);
+    }
 
-        // 项目身份设定优先（有项目提示词时作为身份开头）
-        if (projectId != null) {
+    private String loadProjectSystemPrompt(Long projectId) {
+        if (projectId == null) {
+            return null;
+        }
+        try {
             AgentProject project = projectService.getById(projectId);
-            if (project != null && StringUtils.isNotBlank(project.getSystemPrompt())) {
-                sb.append(project.getSystemPrompt().trim()).append("\n\n");
-            }
+            return project == null ? null : project.getSystemPrompt();
+        } catch (Exception ex) {
+            log.warn("加载项目系统提示词失败, projectId={}", projectId, ex);
+            return null;
         }
-
-        // 技能提示词（按顺序追加在项目提示词之后）
-        if (projectId != null) {
-            List<AgentSkillDefinition> skills = loadProjectSkills(projectId);
-            if (skills != null && !skills.isEmpty()) {
-                for (AgentSkillDefinition skill : skills) {
-                    if (StringUtils.isNotBlank(skill.getSystemPrompt())) {
-                        sb.append("【技能：").append(skill.getSkillName()).append("】\n");
-                        sb.append(skill.getSystemPrompt().trim()).append("\n\n");
-                    }
-                }
-            }
-        }
-
-        // ReAct 工作方式说明（工具调用规则）
-        sb.append(DEFAULT_REACT_SYSTEM_PROMPT);
-
-        if (StringUtils.isNotBlank(userSystemPrompt)) {
-            sb.append("\n\n【附加指令】\n").append(userSystemPrompt.trim());
-        }
-
-        if (cliList != null && !cliList.isEmpty()) {
-            sb.append("\n\n【可用工具】\n");
-            sb.append("当前已挂载 ").append(cliList.size()).append(" 个 CLI 工具，");
-            sb.append("工具名均以 react_cli_ 开头，需要时直接调用。");
-        }
-
-        return sb.toString();
     }
 
     private List<AgentSkillDefinition> loadProjectSkills(Long projectId) {
