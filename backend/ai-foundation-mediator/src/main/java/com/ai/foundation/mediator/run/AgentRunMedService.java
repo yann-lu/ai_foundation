@@ -26,6 +26,7 @@ import com.ai.foundation.facade.dto.run.RunEventDTO;
 import com.ai.foundation.facade.dto.run.RunTaskDTO;
 import com.ai.foundation.facade.dto.run.RunItemDTO;
 import com.ai.foundation.mediator.agent.react.core.ReactAgentRunner;
+import com.ai.foundation.mediator.agent.event.RunCancelFlagStore;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -52,8 +53,8 @@ public class AgentRunMedService {
     private final AgentRunInfoService runInfoService;
     private final AgentConversationMedService conversationMedService;
     private final AgentMessageService messageService;
-    private final AgentOrchestrator orchestrator;
     private final ReactAgentRunner reactAgentRunner;
+    private final RunCancelFlagStore runCancelFlagStore;
     private final AgentConversationService conversationService;
     private final AgentRunEventLogService runEventLogService;
     private final AgentRunTaskInfoService taskInfoService;
@@ -157,7 +158,10 @@ public class AgentRunMedService {
                 .doOnNext(env -> persistEventAsync(pending.run(), pending.conversation(), env));
             })
             .takeUntil(e -> isTerminal(e.getEventType()))
-            .doFinally(signal -> cancelSignals.remove(trimmedRunCode));
+            .doFinally(signal -> {
+                cancelSignals.remove(trimmedRunCode);
+                runCancelFlagStore.clear(trimmedRunCode);
+            });
     }
 
     private void persistEventAsync(AgentRunInfo run, AgentConversationInfo conversation, RunStreamEnvelope env) {
@@ -253,6 +257,8 @@ public class AgentRunMedService {
         if (signal != null) {
             signal.tryEmitEmpty();
         }
+        // 同步写 Redis 协作标志，让 Spring AI Alibaba 框架层在下一轮 LLM 调用前真正停图。
+        runCancelFlagStore.markCancelled(trimmedRunCode);
         log.info("cancelRun runCode={} operator={}", runCode, operator);
     }
 

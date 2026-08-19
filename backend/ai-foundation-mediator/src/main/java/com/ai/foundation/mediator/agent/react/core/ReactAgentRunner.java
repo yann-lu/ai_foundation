@@ -17,9 +17,9 @@ import com.ai.foundation.dal.entity.AgentConversationInfo;
 import com.ai.foundation.dal.entity.AgentProject;
 import com.ai.foundation.dal.entity.AgentRunInfo;
 import com.ai.foundation.mediator.agent.context.AgentExecutionContext;
+import com.ai.foundation.mediator.agent.event.RunCancelFlagStore;
 import com.ai.foundation.mediator.agent.react.cli.ReactCliToolFactory;
 import com.ai.foundation.mediator.agent.react.skill.ReactSystemPromptComposer;
-import com.ai.foundation.mediator.chat.AiChatMedService;
 import com.ai.foundation.mediator.chat.ChatHistoryComposer;
 import com.ai.foundation.mediator.model.AgentModelResolver;
 import com.alibaba.cloud.ai.graph.NodeOutput;
@@ -60,9 +60,11 @@ public class ReactAgentRunner {
     private final AgentProjectSkillRelService projectSkillRelService;
     private final AgentSkillDefinitionService skillDefinitionService;
     private final AgentSkillResourceService skillResourceService;
-    private final AiChatMedService aiChatMedService;
     private final ChatHistoryComposer chatHistoryComposer;
+    private final com.ai.foundation.biz.conversation.AgentMessageService messageService;
+    private final com.ai.foundation.mediator.conversation.AgentConversationMedService conversationMedService;
     private final ReactSystemPromptComposer systemPromptComposer;
+    private final RunCancelFlagStore runCancelFlagStore;
 
     public Flux<RunStreamEnvelope> streamReactRun(AgentRunInfo run, AgentConversationInfo conversation,
                                                    String userMessage, String systemPrompt,
@@ -103,6 +105,7 @@ public class ReactAgentRunner {
                 .chatOptions(chatOptions)
                 .tools(tools)
                 .systemPrompt(finalSystemPrompt)
+                .hooks(new ReactCancelModelHook(runCancelFlagStore, runCode))
                 .build();
 
         RunnableConfig runnableConfig = RunnableConfig.builder()
@@ -133,7 +136,7 @@ public class ReactAgentRunner {
                                 updateRunState(run, RunStateEnum.COMPLETED, 1);
                                 if (StringUtils.isNotBlank(reply)) {
                                     long duration = System.currentTimeMillis() - startTime;
-                                    aiChatMedService.saveAssistantMessage(conversation, reply, duration);
+                                    saveAssistantMessage(conversation, reply, (int) duration);
                                     chatHistoryComposer.completeTurn(conversation.getId(),
                                             userMessage, reply, conversation.getModelName());
                                 }
@@ -281,4 +284,21 @@ public class ReactAgentRunner {
                 || RunStreamEventTypeEnum.RUN_ERROR.getCode().equals(eventType)
                 || RunStreamEventTypeEnum.RUN_CANCELLED.getCode().equals(eventType);
     }
+
+    private void saveAssistantMessage(AgentConversationInfo conversation, String content, int durationMs) {
+        try {
+            com.ai.foundation.dal.entity.AgentMessageInfo msg = new com.ai.foundation.dal.entity.AgentMessageInfo();
+            msg.setConversationId(conversation.getId());
+            msg.setRole("assistant");
+            msg.setContent(content);
+            msg.setTokenCount(0);
+            msg.setDurationMs(durationMs);
+            msg.setState(1);
+            messageService.save(msg);
+            conversationMedService.touchLastMessage(conversation.getId(), conversation.getModelName());
+        } catch (Exception ex) {
+            log.warn("保存 assistant 消息失败 conversationCode={}", conversation.getConversationCode(), ex);
+        }
+    }
+
 }
