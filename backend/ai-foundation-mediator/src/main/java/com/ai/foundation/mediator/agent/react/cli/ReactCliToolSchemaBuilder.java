@@ -8,7 +8,9 @@ import org.apache.commons.lang3.StringUtils;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 @Slf4j
 public final class ReactCliToolSchemaBuilder {
@@ -34,6 +36,12 @@ public final class ReactCliToolSchemaBuilder {
         if (params != null) {
             for (AgentCliParam param : params) {
                 if (StringUtils.isBlank(param.getParamName())) {
+                    continue;
+                }
+                // 凭证类参数（key / secret / token 等）不出现在工具 schema，
+                // 避免模型自行填写错误值覆盖 default_value 导致 INVALID_USER_KEY。
+                // 这些值由 CliParamBinder 从 default_value 注入，模型无需知晓。
+                if (isCredentialParam(param.getParamName())) {
                     continue;
                 }
                 Map<String, Object> prop = new LinkedHashMap<>();
@@ -79,6 +87,9 @@ public final class ReactCliToolSchemaBuilder {
             if (StringUtils.isBlank(param.getParamName())) {
                 continue;
             }
+            if (isCredentialParam(param.getParamName())) {
+                continue;
+            }
             sb.append(param.getParamName());
             if (param.getIsRequired() != null && param.getIsRequired() == 1) {
                 sb.append("(必填)");
@@ -116,5 +127,16 @@ public final class ReactCliToolSchemaBuilder {
             case "object", "json", "map" -> "object";
             default -> "string";
         };
+    }
+
+    /** 视为服务端凭证的参数名集合：这些参数不暴露给模型，避免模型自行填写错误值。 */
+    private static final Set<String> CREDENTIAL_PARAM_NAMES = Set.of(
+            "key", "apikey", "appkey", "secret", "token", "accesskey", "appsecret");
+
+    private static boolean isCredentialParam(String name) {
+        if (StringUtils.isBlank(name)) {
+            return false;
+        }
+        return CREDENTIAL_PARAM_NAMES.contains(name.trim().toLowerCase(Locale.ROOT));
     }
 }

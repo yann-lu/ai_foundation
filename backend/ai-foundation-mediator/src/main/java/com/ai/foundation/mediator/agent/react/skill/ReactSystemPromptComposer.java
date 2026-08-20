@@ -99,7 +99,9 @@ public class ReactSystemPromptComposer {
                 .append("1. CLI 工具名以 react_cli_ 开头，与 commandName 一致；当前已挂载前缀：")
                 .append(buildCliPrefixHint(cliList)).append("。\n")
                 .append("2. 仅可调用本轮已注册的工具；禁止编造未出现在工具列表中的名称。\n")
-                .append("3. 参数有默认值时禁止追问；项目维度上下文用【系统上下文】。\n")
+                .append("3. 参数有默认值时禁止追问；项目维度上下文用【系统上下文】；\n")
+                .append("3.1 必填参数（schema.required）用户消息未提供、系统上下文也拿不到时，必须先用一句自然中文向用户追问，不得盲调工具；\n")
+                .append("3.2 工具返回【空数据 / count=0 / 业务失败】时，先复盘入参是否齐全，确认是参数缺失则向用户追问，不要无脑重试。\n")
                 .append("4. 工具结果含【权限不足】时必须用中文明确告知用户，禁止编造查询结果。\n")
                 .append("5. 工具结果含【业务失败】时必须明确告知用户，禁止编造成功。\n");
     }

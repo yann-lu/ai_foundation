@@ -6,6 +6,7 @@ import lombok.Data;
 public class RunEventDTO {
     private Long id;
     private Long runId;
+    private String runCode;
     private String eventType;
     private String taskState;
     private String eventData;

@@ -17,6 +17,7 @@ public enum RunStreamEventTypeEnum {
     SUMMARY_UPDATE("summary_update"),
     TOOL_CALL("tool_call"),
     TOOL_RESULT("tool_result"),
+    TOOL_STATUS("tool_status"),
     RUN_COMPLETE("run_complete"),
     RUN_ERROR("run_error"),
     RUN_CANCELLED("run_cancelled");

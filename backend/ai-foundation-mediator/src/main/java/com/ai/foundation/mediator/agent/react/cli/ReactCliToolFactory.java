@@ -3,9 +3,10 @@ package com.ai.foundation.mediator.agent.react.cli;
 import com.ai.foundation.biz.cli.AgentCliParamService;
 import com.ai.foundation.dal.entity.AgentCliCommand;
 import com.ai.foundation.dal.entity.AgentCliParam;
-import com.ai.foundation.dal.entity.AgentToolDefinition;
 import com.ai.foundation.mediator.agent.react.core.ReactRunSession;
+import com.ai.foundation.mediator.agent.react.core.StatusAwareToolCallback;
 import com.ai.foundation.mediator.agent.react.dto.ReactCliToolInput;
+import com.ai.foundation.mediator.agent.react.stream.ReactToolStatusEmitter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
@@ -25,6 +26,7 @@ public class ReactCliToolFactory {
 
     private final ReactCliToolInvoker reactCliToolInvoker;
     private final AgentCliParamService cliParamService;
+    private final ReactToolStatusEmitter toolStatusEmitter;
 
     public List<ToolCallback> buildCliTools(List<AgentCliCommand> cliList, ReactRunSession runSession) {
         if (cliList == null || cliList.isEmpty()) {
@@ -40,8 +42,10 @@ public class ReactCliToolFactory {
                 tools.add(tool);
             }
         }
-        log.info("ReactCliToolFactory built {} tool(s) from {} CLI(s)", tools.size(), cliList.size());
-        return tools;
+        // 用 StatusAwareToolCallback 包一层，让每个工具在执行期间发出 running / success / failed 状态事件
+        List<ToolCallback> wrapped = StatusAwareToolCallback.wrapAll(tools, runSession, toolStatusEmitter);
+        log.info("ReactCliToolFactory built {} tool(s) from {} CLI(s)", wrapped.size(), cliList.size());
+        return wrapped;
     }
 
     private ToolCallback buildToolCallback(AgentCliCommand cli, ReactRunSession runSession) {

@@ -80,6 +80,17 @@ public class RunController {
                 .map(ApiResponse::success);
     }
 
+    /**
+     * 拉取指定会话下所有 Run 的事件日志，用于轨迹页拼接多轮对话。
+     * GET /chat/runs/events/by-conversation?conversationCode=xxx
+     */
+    @GetMapping("/events/by-conversation")
+    public Mono<ApiResponse<List<RunEventDTO>>> listEventsByConversation(
+            @RequestParam String conversationCode) {
+        return MonoUtils.fromBlocking(() -> runMedService.listRunEventsByConversation(conversationCode))
+                .map(ApiResponse::success);
+    }
+
     @GetMapping("/page")
     public Mono<ApiResponse<PageResult<RunItemDTO>>> pageRuns(
             @RequestParam String conversationCode,

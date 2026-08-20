@@ -1,10 +1,12 @@
 package com.ai.foundation.mediator.agent.react.cli;
 
+import com.ai.foundation.biz.cli.AgentCliParamService;
 import com.ai.foundation.biz.run.AgentRunTaskInfoService;
 import com.ai.foundation.com.constant.CliCommandTypeConstant;
 import com.ai.foundation.com.exception.BusinessException;
 import com.ai.foundation.com.response.ResultCode;
 import com.ai.foundation.dal.entity.AgentCliCommand;
+import com.ai.foundation.dal.entity.AgentCliParam;
 import com.ai.foundation.dal.entity.AgentRunTaskInfo;
 import com.ai.foundation.mediator.agent.executor.CliCommandExecutor;
 import com.ai.foundation.mediator.agent.executor.CliParamBindContext;
@@ -15,9 +17,12 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
+import org.springframework.util.CollectionUtils;
 import org.springframework.stereotype.Component;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
@@ -31,6 +36,7 @@ public class ReactCliToolInvoker {
 
     private final CliCommandExecutor cliCommandExecutor;
     private final AgentRunTaskInfoService taskInfoService;
+    private final AgentCliParamService cliParamService;
     private final ObjectMapper objectMapper;
 
     private static final int MAX_RETRIES = 3;
@@ -55,6 +61,14 @@ public class ReactCliToolInvoker {
         }
 
         Map<String, Object> toolInputParams = extractParams(input);
+
+        // 必填参数前置校验：避免模型缺参数盲调工具、被服务端返空后又无脑重试
+        String requiredMissing = checkRequiredParams(cli.getId(), toolInputParams);
+        if (requiredMissing != null) {
+            log.warn("ReactCliToolInvoker required params missing, runCode={}, toolName={}, cliId={}, missing={}",
+                    session.getRunCode(), toolName, cli.getId(), requiredMissing);
+            return requiredMissing;
+        }
         CliParamBindContext bindContext = buildBindContext(session, cli);
         bindContext.setPrefilledParams(toolInputParams);
 
@@ -165,6 +179,44 @@ public class ReactCliToolInvoker {
             result.putAll(input.getParams());
         }
         return result;
+    }
+
+    /**
+     * 必填参数前置校验：返回 null 表示通过；返回非 null 字符串作为工具结果直接返给模型。
+     *
+     * <p>判断逻辑：参数 isRequired=1 且模型未传入非空值、且参数本身没有 default_value 时视为缺失。
+     * 缺失时返回带「【业务失败】」前缀的提示，模型读到后会主动向用户追问。
+     */
+    private String checkRequiredParams(Long cliId, Map<String, Object> toolInputParams) {
+        List<AgentCliParam> params = cliParamService.listByCliId(cliId);
+        if (CollectionUtils.isEmpty(params)) {
+            return null;
+        }
+        List<String> missing = new ArrayList<>();
+        for (AgentCliParam param : params) {
+            if (param == null || param.getIsRequired() == null || param.getIsRequired() != 1) {
+                continue;
+            }
+            String name = param.getParamName();
+            if (StringUtils.isBlank(name)) {
+                continue;
+            }
+            // 1. 模型本轮已传非空值
+            Object provided = toolInputParams == null ? null : toolInputParams.get(name);
+            if (provided != null && StringUtils.isNotBlank(String.valueOf(provided))) {
+                continue;
+            }
+            // 2. 参数定义里有 default_value（CliParamBinder 会自动填入）
+            if (StringUtils.isNotBlank(param.getDefaultValue())) {
+                continue;
+            }
+            missing.add(name);
+        }
+        if (missing.isEmpty()) {
+            return null;
+        }
+        return "【业务失败】缺少必填参数: " + String.join(", ", missing)
+                + "。请向用户追问这些参数的具体取值后再次调用工具，不要用空值或默认值代替。";
     }
 
     private String toJson(Object obj) {

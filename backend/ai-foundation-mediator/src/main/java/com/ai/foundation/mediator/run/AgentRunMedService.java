@@ -25,8 +25,9 @@ import com.ai.foundation.facade.dto.run.RunDetailResponse;
 import com.ai.foundation.facade.dto.run.RunEventDTO;
 import com.ai.foundation.facade.dto.run.RunTaskDTO;
 import com.ai.foundation.facade.dto.run.RunItemDTO;
-import com.ai.foundation.mediator.agent.react.core.ReactAgentRunner;
 import com.ai.foundation.mediator.agent.event.RunCancelFlagStore;
+import com.ai.foundation.mediator.agent.react.contract.AgentOrchestrationExecutorRegistry;
+import com.ai.foundation.mediator.agent.react.contract.OrchestrationContext;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -41,7 +42,9 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -53,7 +56,7 @@ public class AgentRunMedService {
     private final AgentRunInfoService runInfoService;
     private final AgentConversationMedService conversationMedService;
     private final AgentMessageService messageService;
-    private final ReactAgentRunner reactAgentRunner;
+    private final AgentOrchestrationExecutorRegistry orchestrationExecutorRegistry;
     private final RunCancelFlagStore runCancelFlagStore;
     private final AgentConversationService conversationService;
     private final AgentRunEventLogService runEventLogService;
@@ -135,27 +138,26 @@ public class AgentRunMedService {
                 if (pending == null) {
                     throw new BusinessException(ResultCode.STATE_INVALID, "Run已启动或不存在");
                 }
-                updateRunState(pending.run(), RunTypeConstant.REACT, RunStateEnum.EXECUTING, 0);
+                updateRunState(pending.run(), pending.run().getRunType(), RunStateEnum.EXECUTING, 0);
                 return pending;
             })
             .subscribeOn(Schedulers.boundedElastic())
             .flatMapMany(pending -> {
-                String rc = pending.run().getRunCode();
-                String cc = pending.conversation().getConversationCode();
-                return Flux.merge(
-                    reactAgentRunner.streamReactRun(
-                            pending.run(), pending.conversation(),
-                            pending.userMessage(), pending.systemPrompt(),
-                            cancelSignal),
-                    cancelSignal.asMono()
-                        .map(v -> cancelledEnvelope(rc, cc))
-                        .cast(RunStreamEnvelope.class)
-                )
-                .takeUntil(e -> isTerminal(e.getEventType()))
-                .concatWith(Mono.fromCallable(() -> envelopeRunComplete(
-                        trimmedRunCode, pending.conversation().getConversationCode()))
-                        .subscribeOn(Schedulers.boundedElastic()))
-                .doOnNext(env -> persistEventAsync(pending.run(), pending.conversation(), env));
+                OrchestrationContext ctx = OrchestrationContext.builder()
+                        .run(pending.run())
+                        .conversation(pending.conversation())
+                        .userMessage(pending.userMessage())
+                        .systemPrompt(pending.systemPrompt())
+                        .cancelSignal(cancelSignal)
+                        .build();
+                Flux<RunStreamEnvelope> orchestrationStream =
+                        orchestrationExecutorRegistry.getRequired(pending.run().getRunType()).execute(ctx);
+                return orchestrationStream
+                        .takeUntil(e -> isTerminal(e.getEventType()))
+                        .concatWith(Mono.fromCallable(() -> envelopeRunComplete(
+                                trimmedRunCode, pending.conversation().getConversationCode()))
+                                .subscribeOn(Schedulers.boundedElastic()))
+                        .doOnNext(env -> persistEventAsync(pending.run(), pending.conversation(), env));
             })
             .takeUntil(e -> isTerminal(e.getEventType()))
             .doFinally(signal -> {
@@ -166,8 +168,23 @@ public class AgentRunMedService {
 
     private void persistEventAsync(AgentRunInfo run, AgentConversationInfo conversation, RunStreamEnvelope env) {
         try {
+            String eventType = env.getEventType();
+            // chat_token / chat_reasoning 由前端走 SSE 实时消费，无需入库；全量 token 流落库
+            // 会让 event_log 在一次对话里膨胀到近千行，且事后回放价值低。
+            // chat_reasoning 历史上有 emit 代码，8/17 后已无新数据，med 层做兜底过滤。
+            if (RunStreamEventTypeEnum.CHAT_TOKEN.getCode().equals(eventType)
+                    || RunStreamEventTypeEnum.CHAT_REASONING.getCode().equals(eventType)) {
+                return;
+            }
+
             String dataStr = null;
-            if (env.getData() != null) {
+            if (RunStreamEventTypeEnum.RUN_COMPLETE.getCode().equals(eventType)) {
+                // run_complete 不再冗余存 reply 全文；只存元信息。
+                // 完整正文事实来源：agent_run_info.reply（已落库）/ SSE 实时 envelope.data。
+                Map<String, Object> meta = new HashMap<>(1);
+                meta.put("replyLen", run.getReply() != null ? run.getReply().length() : 0);
+                dataStr = objectMapper.writeValueAsString(meta);
+            } else if (env.getData() != null) {
                 if (env.getData() instanceof String s) {
                     dataStr = s;
                 } else {
@@ -182,7 +199,7 @@ public class AgentRunMedService {
                     runEventLogService.appendEvent(
                             run.getId(),
                             conversation.getId(),
-                            env.getEventType(),
+                            eventType,
                             env.getTaskState(),
                             finalData,
                             env.getTimestamp()
@@ -301,6 +318,49 @@ public class AgentRunMedService {
         return runConverter.toEventDtoList(events);
     }
 
+    /**
+     * 拉取指定会话下所有 Run 的事件日志（按 run_id asc + id asc 排序），
+     * 供前端轨迹页拼接多轮对话。
+     */
+    public List<RunEventDTO> listRunEventsByConversation(String conversationCode) {
+        if (conversationCode == null || conversationCode.isBlank()) {
+            return List.of();
+        }
+        AgentConversationInfo conversation = conversationService.getByCode(conversationCode.trim());
+        if (conversation == null) {
+            return List.of();
+        }
+        List<AgentRunEventLog> events = runEventLogService.listByConversationId(conversation.getId());
+        if (events.isEmpty()) {
+            return List.of();
+        }
+        // 按 runId 一次性 join AgentRunInfo 取 runCode，避免 N+1
+        java.util.Set<Long> runIds = new java.util.HashSet<>();
+        for (AgentRunEventLog e : events) {
+            if (e != null && e.getRunId() != null) {
+                runIds.add(e.getRunId());
+            }
+        }
+        java.util.Map<Long, String> runCodeMap = new java.util.HashMap<>();
+        if (!runIds.isEmpty()) {
+            List<AgentRunInfo> runs = runInfoService.lambdaQuery()
+                    .in(AgentRunInfo::getId, runIds)
+                    .list();
+            for (AgentRunInfo r : runs) {
+                if (r != null) {
+                    runCodeMap.put(r.getId(), r.getRunCode());
+                }
+            }
+        }
+        List<RunEventDTO> dtos = runConverter.toEventDtoList(events);
+        for (RunEventDTO dto : dtos) {
+            if (dto != null && dto.getRunId() != null) {
+                dto.setRunCode(runCodeMap.get(dto.getRunId()));
+            }
+        }
+        return dtos;
+    }
+
     public PageResult<RunItemDTO> pageRunItems(String conversationCode, long current, long size) {
         AgentConversationInfo conversation = conversationService.getByCode(conversationCode);
         if (conversation == null) {
@@ -372,17 +432,6 @@ public class AgentRunMedService {
         run.setRunType(runType);
         run.setTaskState(state.getCode());
         run.setState(compatState);
-    }
-
-    private RunStreamEnvelope cancelledEnvelope(String runCode, String conversationCode) {
-        RunStreamEnvelope env = new RunStreamEnvelope();
-        env.setEventType(RunStreamEventTypeEnum.RUN_CANCELLED.getCode());
-        env.setRunCode(runCode);
-        env.setConversationCode(conversationCode);
-        env.setTimestamp(System.currentTimeMillis());
-        env.setTaskState(RunStateEnum.CANCELLED.getCode());
-        env.setData(null);
-        return env;
     }
 
     private boolean isTerminal(String eventType) {

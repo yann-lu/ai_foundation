@@ -22,6 +22,8 @@ import com.ai.foundation.mediator.agent.react.cli.ReactCliToolFactory;
 import com.ai.foundation.mediator.agent.react.skill.ReactSystemPromptComposer;
 import com.ai.foundation.mediator.chat.ChatHistoryComposer;
 import com.ai.foundation.mediator.model.AgentModelResolver;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.alibaba.cloud.ai.graph.NodeOutput;
 import com.alibaba.cloud.ai.graph.RunnableConfig;
 import com.alibaba.cloud.ai.graph.agent.ReactAgent;
@@ -30,6 +32,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.StringUtils;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.openai.OpenAiChatOptions;
@@ -65,6 +68,7 @@ public class ReactAgentRunner {
     private final com.ai.foundation.mediator.conversation.AgentConversationMedService conversationMedService;
     private final ReactSystemPromptComposer systemPromptComposer;
     private final RunCancelFlagStore runCancelFlagStore;
+    private final ObjectMapper objectMapper;
 
     public Flux<RunStreamEnvelope> streamReactRun(AgentRunInfo run, AgentConversationInfo conversation,
                                                    String userMessage, String systemPrompt,
@@ -89,10 +93,16 @@ public class ReactAgentRunner {
 
         List<ToolCallback> tools = reactCliToolFactory.buildCliTools(cliList, session);
 
-        String finalSystemPrompt = buildFinalSystemPrompt(projectId, systemPrompt, cliList);
+        String projectPrompt = buildFinalSystemPrompt(projectId, systemPrompt, cliList);
+        // 注入更早轮次的滚动摘要（热缓存只保留近 N 轮原文，更早的用摘要）
+        String summaryBlock = chatHistoryComposer.getSummaryBlock(conversation);
+        String finalSystemPrompt = (summaryBlock != null && !summaryBlock.isEmpty())
+                ? projectPrompt + "\n\n" + summaryBlock
+                : projectPrompt;
 
-        List<Message> messages = new ArrayList<>();
-        messages.add(new UserMessage(userMessage));
+        // 多轮上下文：先取热缓存近 N 轮 + 当前 user message，模型能"看到"前面对话
+        List<Message> messages = buildHistoryMessages(conversation, userMessage);
+        saveRequestMessages(run, messages);
 
         ChatOptions chatOptions = OpenAiChatOptions.builder()
                 .model(modelName)
@@ -299,6 +309,76 @@ public class ReactAgentRunner {
         } catch (Exception ex) {
             log.warn("保存 assistant 消息失败 conversationCode={}", conversation.getConversationCode(), ex);
         }
+    }
+
+
+    /**
+     * 多轮上下文组装：从 Redis 热缓存（或 DB 预热）取近 N 轮 user/assistant 轮次，
+     * 再追加本轮 user message。返回 Spring AI 的 messages 列表，喂给 ReactAgent。
+     */
+    private List<Message> buildHistoryMessages(AgentConversationInfo conversation, String userMessage) {
+        List<Message> messages = new ArrayList<>();
+        try {
+            List<ChatHistoryComposer.HotTurn> history = chatHistoryComposer.composeHistory(conversation);
+            if (history != null) {
+                for (ChatHistoryComposer.HotTurn turn : history) {
+                    if (turn == null) continue;
+                    if (StringUtils.isNotBlank(turn.getUser())) {
+                        messages.add(new UserMessage(turn.getUser()));
+                    }
+                    if (StringUtils.isNotBlank(turn.getAssistant())) {
+                        messages.add(new AssistantMessage(turn.getAssistant()));
+                    }
+                }
+            }
+        } catch (Exception ex) {
+            log.warn("加载多轮历史失败，回退到单轮模式 conversationCode={}", conversation.getConversationCode(), ex);
+        }
+        messages.add(new UserMessage(userMessage != null ? userMessage : ""));
+        return messages;
+    }
+
+    /**
+     * 把本次 Run 实际发给模型的消息栈（含历史 + 当前 user）序列化为 JSON，
+     * 写回 agent_run_info.request_messages，便于事后回查上下文是否齐全。
+     */
+    private void saveRequestMessages(AgentRunInfo run, List<Message> messages) {
+        if (run == null || run.getId() == null || messages == null || messages.isEmpty()) {
+            return;
+        }
+        try {
+            List<RequestMessagePayload> payload = new ArrayList<>(messages.size());
+            for (Message m : messages) {
+                if (m == null) continue;
+                String role = m.getMessageType() == null ? "user" : m.getMessageType().name().toLowerCase();
+                String text = "";
+                if (m instanceof UserMessage um) {
+                    text = um.getText();
+                } else if (m instanceof AssistantMessage am) {
+                    text = am.getText();
+                } else {
+                    text = m.getText();
+                }
+                payload.add(new RequestMessagePayload(role, text == null ? "" : text));
+            }
+            String json = objectMapper.writeValueAsString(payload);
+            AgentRunInfo update = new AgentRunInfo();
+            update.setId(run.getId());
+            update.setRequestMessages(json);
+            runInfoService.updateById(update);
+        } catch (JsonProcessingException ex) {
+            log.warn("序列化 requestMessages 失败 runId={}", run.getId(), ex);
+        } catch (Exception ex) {
+            log.warn("写回 requestMessages 失败 runId={}", run.getId(), ex);
+        }
+    }
+
+    /** Request messages 持久化用的轻量 DTO，避免把 Spring AI Message 直接序列化进 JSON。 */
+    @lombok.Data
+    @lombok.AllArgsConstructor
+    private static class RequestMessagePayload {
+        private String role;
+        private String content;
     }
 
 }
