@@ -5,6 +5,7 @@ import com.ai.foundation.biz.converter.MessageConverter;
 import com.ai.foundation.biz.conversation.AgentConversationService;
 import com.ai.foundation.biz.conversation.AgentMessageService;
 import com.ai.foundation.biz.project.AgentProjectService;
+import com.ai.foundation.biz.skill.AgentSkillDefinitionService;
 import com.ai.foundation.com.exception.BusinessException;
 import com.ai.foundation.com.response.PageResult;
 import com.ai.foundation.com.response.ResultCode;
@@ -17,16 +18,22 @@ import com.ai.foundation.facade.dto.conversation.ConversationDetailDTO;
 import com.ai.foundation.facade.dto.conversation.ConversationPageRequest;
 import com.ai.foundation.facade.dto.conversation.MessageDTO;
 import com.ai.foundation.mediator.model.AgentModelResolver;
-import com.ai.foundation.mediator.prompt.ProjectPromptService;
 import com.ai.foundation.mediator.chat.ChatHistoryComposer;
 import com.baomidou.mybatisplus.core.metadata.IPage;
 import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.util.CollectionUtils;
 
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -38,11 +45,12 @@ public class AgentConversationMedService {
     private final AgentConversationService conversationService;
     private final AgentMessageService messageService;
     private final AgentProjectService projectService;
+    private final AgentSkillDefinitionService skillDefinitionService;
     private final AgentModelResolver modelResolver;
-    private final ProjectPromptService projectPromptService;
     private final ConversationConverter conversationConverter;
     private final MessageConverter messageConverter;
     private final ChatHistoryComposer chatHistoryComposer;
+    private final ObjectMapper objectMapper;
 
     public ConversationDTO create(ConversationCreateRequest request) {
         AgentProject project = projectService.getByCode(request.getProductCode());
@@ -50,12 +58,14 @@ public class AgentConversationMedService {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "产品编码对应的项目不存在: " + request.getProductCode());
         }
 
+        Map<String, Object> mergedContext = mergeAndValidateContext(request, project.getId());
+
         AgentConversationInfo entity = new AgentConversationInfo();
         entity.setProjectId(project.getId());
         entity.setProductCode(request.getProductCode());
         entity.setConversationCode(ConversationCodeGenerator.generate());
         entity.setUserId(request.getUserId() != null ? request.getUserId() : 0L);
-        entity.setContextVariables(projectPromptService.buildConversationVariables(project, request));
+        entity.setContextVariables(serializeContextVariables(mergedContext));
         entity.setTitle(request.getTitle() != null && !request.getTitle().isBlank()
                 ? request.getTitle() : "新会话");
         entity.setModelProvider("openai");
@@ -63,8 +73,54 @@ public class AgentConversationMedService {
         entity.setIsPin(0);
         entity.setState(0);
         conversationService.save(entity);
-        log.info("创建会话成功 code={} projectId={} model={}", entity.getConversationCode(), entity.getProjectId(), entity.getModelName());
+        log.info("创建会话成功 code={} projectId={} model={} contextKeys={}",
+                entity.getConversationCode(), entity.getProjectId(), entity.getModelName(), mergedContext.keySet());
         return conversationConverter.toDto(entity);
+    }
+
+    /**
+     * 合并 KV 池 + 校验 skill 模板里出现的用户级必传 key。
+     *
+     * @return 合并后的 KV Map（key=value 一定有值或被显式置 null）
+     */
+    private Map<String, Object> mergeAndValidateContext(ConversationCreateRequest request, Long projectId) {
+        Map<String, Object> merged = new HashMap<>();
+        if (request.getContextVariables() != null) {
+            merged.putAll(request.getContextVariables());
+        }
+        Set<String> required = skillDefinitionService.collectUserRequiredContextKeys(projectId);
+        if (!CollectionUtils.isEmpty(required)) {
+            List<String> missing = required.stream()
+                    .filter(k -> !merged.containsKey(k) || isBlankValue(merged.get(k)))
+                    .collect(Collectors.toList());
+            if (!missing.isEmpty()) {
+                throw new BusinessException(ResultCode.PARAM_INVALID,
+                        "创建会话缺少必需上下文: " + String.join(", ", missing));
+            }
+        }
+        return merged;
+    }
+
+    private boolean isBlankValue(Object val) {
+        if (val == null) {
+            return true;
+        }
+        if (val instanceof String s) {
+            return s.isBlank();
+        }
+        return false;
+    }
+
+    private String serializeContextVariables(Map<String, Object> ctx) {
+        if (ctx == null || ctx.isEmpty()) {
+            return "{}";
+        }
+        try {
+            return objectMapper.writeValueAsString(ctx);
+        } catch (JsonProcessingException ex) {
+            log.warn("序列化会话上下文失败, 退化写空对象", ex);
+            return "{}";
+        }
     }
 
     public PageResult<ConversationDTO> page(ConversationPageRequest request) {

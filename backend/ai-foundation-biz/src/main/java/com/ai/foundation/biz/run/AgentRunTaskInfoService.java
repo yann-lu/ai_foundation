@@ -10,7 +10,8 @@ public interface AgentRunTaskInfoService extends IService<AgentRunTaskInfo> {
     List<AgentRunTaskInfo> listByRunId(Long runId);
 
     AgentRunTaskInfo createTask(Long runId, String taskType, String capabilityType,
-                                 Long refId, String refName, String instruction);
+                                 Long refId, String refName, String instruction,
+                                 String inputParams);
 
     void markRunning(Long taskId);
 

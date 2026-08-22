@@ -17,4 +17,8 @@ public class RunTaskDTO {
     private String errorMessage;
     private Long costMs;
     private LocalDateTime createTime;
+    /** 工具调用入参（JSON 字符串） */
+    private String inputParams;
+    /** 工具调用结果（JSON / 文本） */
+    private String resultRef;
 }

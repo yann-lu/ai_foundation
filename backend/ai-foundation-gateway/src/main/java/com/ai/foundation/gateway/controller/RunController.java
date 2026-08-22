@@ -100,6 +100,20 @@ public class RunController {
                 .map(ApiResponse::success);
     }
 
+    /**
+     * 按会话拉取所有 Run 的完整详情（requestMessages / reply / reasoning / tasks），
+     * 供前端"详情"页一次性加载多轮对话快照。
+     */
+    @GetMapping("/detail/list")
+    public Mono<ApiResponse<PageResult<RunDetailResponse>>> listDetailsByConversation(
+            @RequestParam String conversationCode,
+            @RequestParam(defaultValue = "1") long current,
+            @RequestParam(defaultValue = "50") long size) {
+        return MonoUtils.fromBlocking(() ->
+                runMedService.listRunDetailsByConversation(conversationCode, current, size))
+                .map(ApiResponse::success);
+    }
+
     @PostMapping("/cancel")
     public Mono<ApiResponse<Boolean>> cancel(@Valid @RequestBody RunCancelRequest request) {
         return MonoUtils.fromBlocking(() -> {

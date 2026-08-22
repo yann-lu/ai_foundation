@@ -16,7 +16,6 @@ import com.ai.foundation.facade.dto.skill.SkillBindOptionDTO;
 import com.ai.foundation.facade.dto.project.AgentProjectDTO;
 import com.ai.foundation.facade.dto.project.AgentProjectPageRequest;
 import com.ai.foundation.facade.dto.project.AgentProjectSaveRequest;
-import com.ai.foundation.mediator.prompt.ProjectPromptService;
 import com.ai.foundation.mediator.store.CapabilityCatalogCache;
 import com.ai.foundation.biz.skill.AgentProjectSkillRelService;
 import com.ai.foundation.biz.skill.AgentSkillDefinitionService;
@@ -42,7 +41,6 @@ public class AgentProjectMedService {
 
     private final AgentProjectService projectService;
     private final ProjectConverter converter;
-    private final ProjectPromptService projectPromptService;
     private final AgentCliCommandService cliCommandService;
     private final AgentProjectCliMappingService projectCliMappingService;
     private final CapabilityCatalogCache capabilityCatalogCache;
@@ -66,14 +64,10 @@ public class AgentProjectMedService {
     }
 
     public void create(AgentProjectSaveRequest request, String operator) {
-        projectPromptService.validateProjectConfig(request.getPromptVariables());
         if (projectService.existsByCode(request.getProjectCode(), null)) {
             throw new BusinessException(ResultCode.DATA_DUPLICATED, "项目编码已存在");
         }
         AgentProject entity = converter.toEntity(request);
-        if (StringUtils.isBlank(entity.getPromptVariables())) {
-            entity.setPromptVariables(null);
-        }
         if (entity.getState() == null) {
             entity.setState(CommonConstants.STATE_ENABLED);
         }
@@ -84,7 +78,6 @@ public class AgentProjectMedService {
     }
 
     public void update(AgentProjectSaveRequest request, String operator) {
-        projectPromptService.validateProjectConfig(request.getPromptVariables());
         AgentProject existing = projectService.getById(request.getId());
         if (existing == null) {
             throw new BusinessException(ResultCode.DATA_NOT_FOUND, "项目不存在");
@@ -93,9 +86,6 @@ public class AgentProjectMedService {
             throw new BusinessException(ResultCode.DATA_DUPLICATED, "项目编码已存在");
         }
         converter.updateEntity(request, existing);
-        if (StringUtils.isBlank(existing.getPromptVariables())) {
-            existing.setPromptVariables(null);
-        }
         existing.setModifyUser(operator);
         projectService.updateById(existing);
         log.info("更新项目成功 id={} operator={}", request.getId(), operator);

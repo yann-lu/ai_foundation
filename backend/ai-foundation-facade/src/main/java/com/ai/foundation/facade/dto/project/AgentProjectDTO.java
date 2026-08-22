@@ -11,8 +11,6 @@ public class AgentProjectDTO {
     private String projectName;
     private String projectCode;
     private String description;
-    private String systemPrompt;
-    private String promptVariables;
     private Integer state;
     private String createUser;
     private String modifyUser;

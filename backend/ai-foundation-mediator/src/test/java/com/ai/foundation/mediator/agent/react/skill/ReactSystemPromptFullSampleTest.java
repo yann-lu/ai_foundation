@@ -4,19 +4,18 @@ import com.ai.foundation.dal.entity.AgentCliCommand;
 import com.ai.foundation.dal.entity.AgentSkillDefinition;
 
 import java.lang.reflect.Method;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 /**
  * 模拟一个真实业务场景，输出完整的 ReAct System Prompt。
- * 假设：酒店订单管理项目，挂 1 个 Skill + 2 个 CLI 工具 + 用户临时附了一段指令。
+ * 假设：星辰旅游助手项目，挂 1 个 Skill + 2 个 CLI 工具 + 用户临时附了一段指令。
+ * <p>
+ * A 档后：不再有 projectSystemPrompt 段，baseRole 由 projectName 驱动。
  */
 public class ReactSystemPromptFullSampleTest {
 
     public static void main(String[] args) throws Exception {
-        SkillCapabilityRegistry registry = new SkillCapabilityRegistry(Collections.emptyList());
-        ReactSystemPromptComposer composer = new ReactSystemPromptComposer(registry);
+        ReactSystemPromptComposer composer = new ReactSystemPromptComposer();
 
         AgentSkillDefinition skill = new AgentSkillDefinition();
         skill.setSkillCode("hotel_order_query");
@@ -37,14 +36,14 @@ public class ReactSystemPromptFullSampleTest {
         cli2.setCommandType("API");
         cli2.setState(1);
 
+        // 4-arg 签名：compose(skills, cliList, userSystemPrompt, projectName)
         Method compose = ReactSystemPromptComposer.class.getMethod(
-                "compose", String.class, List.class, List.class, String.class);
+                "compose", List.class, List.class, String.class, String.class);
         Object out = compose.invoke(composer,
-                "你是【星辰酒店集团】的智能管家，负责协助前厅、客房、财务同事处理日常运营。\n"
-                        + "回答必须专业、礼貌，且严格使用简体中文。",
                 List.of(skill),
                 List.of(cli1, cli2),
-                "本轮所有金额展示保留两位小数。");
+                "本轮所有金额展示保留两位小数。",
+                "星辰旅游助手");
         System.out.println(out);
     }
 }

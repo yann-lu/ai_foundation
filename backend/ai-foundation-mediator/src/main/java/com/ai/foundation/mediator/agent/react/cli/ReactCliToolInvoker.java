@@ -75,13 +75,16 @@ public class ReactCliToolInvoker {
         Long taskId = null;
         long startMs = System.currentTimeMillis();
         try {
+            // 持久化入参：模型实际下发的工具调用参数（已解析过的 Map）
+            String inputJson = objectMapper.writeValueAsString(toolInputParams);
             AgentRunTaskInfo task = taskInfoService.createTask(
                     session.getRunId(),
                     "tool",
                     "API",
                     cli.getId(),
                     cli.getCommandName(),
-                    session.getUserMessage()
+                    session.getUserMessage(),
+                    inputJson
             );
             taskId = task.getId();
             taskInfoService.markRunning(taskId);

@@ -42,6 +42,7 @@ import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -368,6 +369,32 @@ public class AgentRunMedService {
         }
         IPage<AgentRunInfo> page = pageRuns(conversation.getId(), current, size);
         List<RunItemDTO> records = runConverter.toItemDtoList(page.getRecords());
+        return new PageResult<>(records, page.getTotal(), page.getCurrent(), page.getSize());
+    }
+
+    /**
+     * 按会话拉取所有 Run 的完整详情（requestMessages / reply / reasoning / tasks），
+     * 供前端"详情"页一次性渲染多轮对话快照。
+     *
+     * <p>按 runCode 升序返回，恰好对应"用户发起的先后"顺序。
+     */
+    public PageResult<RunDetailResponse> listRunDetailsByConversation(
+            String conversationCode, long current, long size) {
+        if (conversationCode == null || conversationCode.isBlank()) {
+            return new PageResult<>(List.of(), 0, current, size);
+        }
+        AgentConversationInfo conversation = conversationService.getByCode(conversationCode.trim());
+        if (conversation == null) {
+            return new PageResult<>(List.of(), 0, current, size);
+        }
+        IPage<AgentRunInfo> page = pageRuns(conversation.getId(), current, size);
+        List<RunDetailResponse> records = new ArrayList<>(page.getRecords().size());
+        for (AgentRunInfo run : page.getRecords()) {
+            if (run == null) {
+                continue;
+            }
+            records.add(buildRunDetailResponse(run));
+        }
         return new PageResult<>(records, page.getTotal(), page.getCurrent(), page.getSize());
     }
 

@@ -26,6 +26,9 @@ public class AgentSkillSaveRequest {
 
     private String systemPrompt;
 
+    @Size(max = 4000, message = "运行时上下文模板不能超过4000字符")
+    private String runtimeContextTemplate;
+
     private String configJson;
 
     private Integer state = 1;

@@ -1,11 +1,14 @@
 package com.ai.foundation.mediator.agent.react.core;
 
 import com.ai.foundation.dal.entity.AgentCliCommand;
+import com.ai.foundation.dal.entity.AgentSkillDefinition;
+import com.ai.foundation.mediator.agent.react.skill.SkillActivationPayload;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 
 @Slf4j
@@ -23,8 +26,14 @@ public class ReactRunSession {
     private Long projectId;
     private com.ai.foundation.mediator.agent.context.AgentExecutionContext executionContext;
     private List<AgentCliCommand> availableCliCommands = new ArrayList<>();
+    private List<AgentSkillDefinition> availableSkills = new ArrayList<>();
     private List<String> toolInterpretedResults = new ArrayList<>();
     private int toolInvokeCount = 0;
+
+    /**
+     * 当前 Run 已激活的 Skill 载荷（单槽，再次激活会覆盖上一次）。
+     */
+    private SkillActivationPayload activatedSkill;
 
     public static ReactRunSession current() {
         return HOLDER.get();
@@ -59,5 +68,13 @@ public class ReactRunSession {
 
     public void markToolInvoked() {
         this.toolInvokeCount++;
+    }
+
+    public void activateSkill(SkillActivationPayload payload) {
+        this.activatedSkill = payload;
+    }
+
+    public Optional<SkillActivationPayload> currentActivatedSkill() {
+        return Optional.ofNullable(activatedSkill);
     }
 }

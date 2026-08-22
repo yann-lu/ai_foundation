@@ -27,6 +27,8 @@ public class AgentSkillDefinition {
 
     private String systemPrompt;
 
+    private String runtimeContextTemplate;
+
     private String configJson;
 
     private Integer state;

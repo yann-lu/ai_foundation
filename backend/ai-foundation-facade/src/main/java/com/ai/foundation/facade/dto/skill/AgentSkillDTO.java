@@ -20,6 +20,8 @@ public class AgentSkillDTO {
 
     private String systemPrompt;
 
+    private String runtimeContextTemplate;
+
     private String configJson;
 
     private Integer state;

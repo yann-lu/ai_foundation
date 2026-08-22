@@ -40,6 +40,8 @@ agent:
     models:
       chat: deepseek-v4-pro
       embedding: bge-m3
+  react:
+    activation-body-preview-max: 4000
   retrieval:
     top-k: 5
     similarity-threshold: 0.6

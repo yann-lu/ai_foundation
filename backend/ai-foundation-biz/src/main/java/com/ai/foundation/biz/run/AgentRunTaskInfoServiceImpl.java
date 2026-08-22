@@ -26,7 +26,8 @@ public class AgentRunTaskInfoServiceImpl
 
     @Override
     public AgentRunTaskInfo createTask(Long runId, String taskType, String capabilityType,
-                                        Long refId, String refName, String instruction) {
+                                        Long refId, String refName, String instruction,
+                                        String inputParams) {
         AgentRunTaskInfo task = new AgentRunTaskInfo();
         task.setRunId(runId);
         task.setTaskCode("task_" + System.currentTimeMillis() + "_" + (int)(Math.random() * 1000));
@@ -35,6 +36,7 @@ public class AgentRunTaskInfoServiceImpl
         task.setRefId(refId);
         task.setRefName(refName);
         task.setInstruction(instruction);
+        task.setInputParams(inputParams);
         task.setTaskState("pending");
         this.save(task);
         return task;

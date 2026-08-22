@@ -18,6 +18,10 @@
         </dependency>
         <dependency>
             <groupId>com.ai.foundation</groupId>
+            <artifactId>ai-foundation-com</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.ai.foundation</groupId>
             <artifactId>ai-foundation-dal</artifactId>
         </dependency>
         <dependency>

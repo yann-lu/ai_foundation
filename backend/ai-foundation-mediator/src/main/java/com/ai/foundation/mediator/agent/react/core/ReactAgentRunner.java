@@ -46,6 +46,7 @@ import reactor.core.scheduler.Schedulers;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 @Slf4j
 @Component
@@ -56,6 +57,7 @@ public class ReactAgentRunner {
     private final ChatModel chatModel;
     private final AgentModelResolver modelResolver;
     private final ReactCliToolFactory reactCliToolFactory;
+    private final com.ai.foundation.mediator.agent.react.skill.ReactSkillToolFactory reactSkillToolFactory;
     private final AgentCliCommandService cliCommandService;
     private final AgentProjectCliMappingService projectCliMappingService;
     private final AgentProjectService projectService;
@@ -86,14 +88,17 @@ public class ReactAgentRunner {
         session.setUserMessage(userMessage);
         session.setModelName(modelName);
         session.setProjectId(projectId);
-        session.setExecutionContext(buildExecutionContext(projectId));
+        session.setExecutionContext(buildExecutionContext(projectId, conversation));
 
         List<AgentCliCommand> cliList = loadProjectCliCommands(projectId);
         session.setAvailableCliCommands(cliList);
 
-        List<ToolCallback> tools = reactCliToolFactory.buildCliTools(cliList, session);
+        List<AgentSkillDefinition> skills = loadProjectSkills(projectId);
+        session.setAvailableSkills(skills);
 
-        String projectPrompt = buildFinalSystemPrompt(projectId, systemPrompt, cliList);
+        List<ToolCallback> tools = buildTools(session, cliList, skills);
+
+        String projectPrompt = buildFinalSystemPrompt(projectId, systemPrompt, skills);
         // 注入更早轮次的滚动摘要（热缓存只保留近 N 轮原文，更早的用摘要）
         String summaryBlock = chatHistoryComposer.getSummaryBlock(conversation);
         String finalSystemPrompt = (summaryBlock != null && !summaryBlock.isEmpty())
@@ -102,7 +107,7 @@ public class ReactAgentRunner {
 
         // 多轮上下文：先取热缓存近 N 轮 + 当前 user message，模型能"看到"前面对话
         List<Message> messages = buildHistoryMessages(conversation, userMessage);
-        saveRequestMessages(run, messages);
+        saveRequestMessages(run, messages, finalSystemPrompt);
 
         ChatOptions chatOptions = OpenAiChatOptions.builder()
                 .model(modelName)
@@ -178,21 +183,24 @@ public class ReactAgentRunner {
     }
 
     private String buildFinalSystemPrompt(Long projectId, String userSystemPrompt,
-                                           List<AgentCliCommand> cliList) {
-        String projectSystemPrompt = loadProjectSystemPrompt(projectId);
-        List<AgentSkillDefinition> skills = loadProjectSkills(projectId);
-        return systemPromptComposer.compose(projectSystemPrompt, skills, cliList, userSystemPrompt);
+                                           List<AgentSkillDefinition> skills) {
+        String projectName = loadProjectName(projectId);
+        return systemPromptComposer.compose(skills, List.of(),
+                userSystemPrompt, projectName);
     }
 
-    private String loadProjectSystemPrompt(Long projectId) {
+    private String loadProjectName(Long projectId) {
         if (projectId == null) {
             return null;
         }
         try {
             AgentProject project = projectService.getById(projectId);
-            return project == null ? null : project.getSystemPrompt();
+            if (project == null) {
+                return null;
+            }
+            return project.getProjectName();
         } catch (Exception ex) {
-            log.warn("加载项目系统提示词失败, projectId={}", projectId, ex);
+            log.warn("加载项目名称失败, projectId={}", projectId, ex);
             return null;
         }
     }
@@ -252,9 +260,28 @@ public class ReactAgentRunner {
         }
     }
 
-    private AgentExecutionContext buildExecutionContext(Long projectId) {
+    private AgentExecutionContext buildExecutionContext(Long projectId, AgentConversationInfo conversation) {
         AgentExecutionContext context = new AgentExecutionContext();
         context.setProjectId(projectId);
+        if (projectId != null) {
+            try {
+                AgentProject project = projectService.getById(projectId);
+                if (project != null) {
+                    context.setProjectCode(project.getProjectCode());
+                }
+            } catch (Exception ex) {
+                log.warn("加载项目编码失败, projectId={}", projectId, ex);
+            }
+        }
+        if (conversation != null && StringUtils.isNotBlank(conversation.getContextVariables())) {
+            try {
+                Map<String, Object> map = objectMapper.readValue(conversation.getContextVariables(),
+                        new com.fasterxml.jackson.core.type.TypeReference<Map<String, Object>>() {});
+                context.setContextVariables(map);
+            } catch (Exception ex) {
+                log.warn("反序列化会话上下文失败, conversationId={}", conversation.getId(), ex);
+            }
+        }
         return context;
     }
 
@@ -339,27 +366,34 @@ public class ReactAgentRunner {
     }
 
     /**
-     * 把本次 Run 实际发给模型的消息栈（含历史 + 当前 user）序列化为 JSON，
+     * 把本次 Run 实际发给模型的消息栈（含 system + 历史 + 当前 user）序列化为 JSON，
      * 写回 agent_run_info.request_messages，便于事后回查上下文是否齐全。
      */
-    private void saveRequestMessages(AgentRunInfo run, List<Message> messages) {
-        if (run == null || run.getId() == null || messages == null || messages.isEmpty()) {
+    private void saveRequestMessages(AgentRunInfo run, List<Message> messages, String systemPrompt) {
+        if (run == null || run.getId() == null) {
             return;
         }
         try {
-            List<RequestMessagePayload> payload = new ArrayList<>(messages.size());
-            for (Message m : messages) {
-                if (m == null) continue;
-                String role = m.getMessageType() == null ? "user" : m.getMessageType().name().toLowerCase();
-                String text = "";
-                if (m instanceof UserMessage um) {
-                    text = um.getText();
-                } else if (m instanceof AssistantMessage am) {
-                    text = am.getText();
-                } else {
-                    text = m.getText();
+            List<RequestMessagePayload> payload = new ArrayList<>();
+            // 1) system 段：实际下发给模型的 systemPrompt（与 ReactAgent.builder().systemPrompt(...) 一致）
+            if (systemPrompt != null && !systemPrompt.isEmpty()) {
+                payload.add(new RequestMessagePayload("system", systemPrompt));
+            }
+            // 2) 历史 + 当前 user
+            if (messages != null) {
+                for (Message m : messages) {
+                    if (m == null) continue;
+                    String role = m.getMessageType() == null ? "user" : m.getMessageType().name().toLowerCase();
+                    String text = "";
+                    if (m instanceof UserMessage um) {
+                        text = um.getText();
+                    } else if (m instanceof AssistantMessage am) {
+                        text = am.getText();
+                    } else {
+                        text = m.getText();
+                    }
+                    payload.add(new RequestMessagePayload(role, text == null ? "" : text));
                 }
-                payload.add(new RequestMessagePayload(role, text == null ? "" : text));
             }
             String json = objectMapper.writeValueAsString(payload);
             AgentRunInfo update = new AgentRunInfo();
@@ -379,6 +413,25 @@ public class ReactAgentRunner {
     private static class RequestMessagePayload {
         private String role;
         private String content;
+    }
+
+    /**
+     * 组装本轮 ReAct 工具列表：CLI 工具 + Skill 工具。
+     * <p>
+     * Skill 工具以 {@code skill_{skillCode}} 注册为 {@link ToolCallback}，由
+     * {@link com.ai.foundation.mediator.agent.react.skill.ReactSkillToolFactory} 构造。
+     * 模型在看到 outer prompt 里的【可用 Skill】索引后，调用 {@code skill_*} 触发激活，
+     * 由 {@link com.ai.foundation.mediator.agent.react.skill.ReactSkillToolInvoker}
+     * 按需回传该 skill 的 systemPrompt 预览。
+     */
+    private List<ToolCallback> buildTools(ReactRunSession session,
+                                          List<AgentCliCommand> cliList,
+                                          List<AgentSkillDefinition> skills) {
+        List<ToolCallback> tools = new ArrayList<>(reactCliToolFactory.buildCliTools(cliList, session));
+        if (skills != null && !skills.isEmpty()) {
+            tools.addAll(reactSkillToolFactory.buildSkillTools(skills, session));
+        }
+        return tools;
     }
 
 }
